@@ -21,22 +21,24 @@
   jeroen@frijters.net
   
 */
-using System.Reflection;
-using System.Runtime.CompilerServices;
+#include "stdafx.h"
+
+using namespace System::Reflection;
+using namespace System::Runtime::CompilerServices;
 
 //
 // General Information about an assembly is controlled through the following 
 // set of attributes. Change these attribute values to modify the information
 // associated with an assembly.
 //
-[assembly: AssemblyTitle("")]
-[assembly: AssemblyDescription("")]
-[assembly: AssemblyConfiguration("")]
-[assembly: AssemblyCompany("")]
-[assembly: AssemblyProduct("")]
-[assembly: AssemblyCopyright("")]
-[assembly: AssemblyTrademark("")]
-[assembly: AssemblyCulture("")]		
+[assembly:AssemblyTitleAttribute("")];
+[assembly:AssemblyDescriptionAttribute("")];
+[assembly:AssemblyConfigurationAttribute("")];
+[assembly:AssemblyCompanyAttribute("")];
+[assembly:AssemblyProductAttribute("")];
+[assembly:AssemblyCopyrightAttribute("")];
+[assembly:AssemblyTrademarkAttribute("")];
+[assembly:AssemblyCultureAttribute("")];		
 
 //
 // Version information for an assembly consists of the following four values:
@@ -46,10 +48,10 @@ using System.Runtime.CompilerServices;
 //      Build Number
 //      Revision
 //
-// You can specify all the values or you can default the Revision and Build Numbers 
+// You can specify all the value or you can default the Revision and Build Numbers 
 // by using the '*' as shown below:
 
-[assembly: AssemblyVersion("1.0.*")]
+[assembly:AssemblyVersionAttribute("1.0.1060.22610")];
 
 //
 // In order to sign your assembly you must specify a key to use. Refer to the 
@@ -68,14 +70,12 @@ using System.Runtime.CompilerServices;
 //       (2) If the KeyName does not exist and the KeyFile does exist, the key 
 //           in the KeyFile is installed into the CSP and used.
 //   (*) In order to create a KeyFile, you can use the sn.exe (Strong Name) utility.
-//       When specifying the KeyFile, the location of the KeyFile should be
-//       relative to the project output directory which is
-//       %Project Directory%\obj\<configuration>. For example, if your KeyFile is
-//       located in the project directory, you would specify the AssemblyKeyFile 
-//       attribute as [assembly: AssemblyKeyFile("..\\..\\mykey.snk")]
+//        When specifying the KeyFile, the location of the KeyFile should be
+//        relative to the project directory.
 //   (*) Delay Signing is an advanced option - see the Microsoft .NET Framework
 //       documentation for more information on this.
 //
-[assembly: AssemblyDelaySign(false)]
-[assembly: AssemblyKeyFile("")]
-[assembly: AssemblyKeyName("")]
+[assembly:AssemblyDelaySignAttribute(false)];
+[assembly:AssemblyKeyFileAttribute("")];
+[assembly:AssemblyKeyNameAttribute("")];
+

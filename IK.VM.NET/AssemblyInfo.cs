@@ -29,12 +29,12 @@ using System.Runtime.CompilerServices;
 // set of attributes. Change these attribute values to modify the information
 // associated with an assembly.
 //
-[assembly: AssemblyTitle("")]
-[assembly: AssemblyDescription("")]
+[assembly: AssemblyTitle("IK.VM.NET")]
+[assembly: AssemblyDescription("JVM for .NET")]
 [assembly: AssemblyConfiguration("")]
 [assembly: AssemblyCompany("")]
 [assembly: AssemblyProduct("")]
-[assembly: AssemblyCopyright("")]
+[assembly: AssemblyCopyright("Copyright (C) 2002 Jeroen Frijters")]
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]		
 

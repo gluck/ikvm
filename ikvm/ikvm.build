@@ -1,16 +1,13 @@
 <?xml version="1.0"?>
 <project name="ikvm" default="ikvm">
     <target name="ikvm">
-        <property overwrite="false" name="signed" value="" />
-        <csc target="exe" output="../bin/ikvm.exe" define="TRACE;${signed}">
+        <csc target="exe" output="../bin/ikvm.exe">
             <sources>
-                <include name="../CommonAssemblyInfo.cs" />
-                <include name="*.cs" />
+                <includes name="*.cs" />
             </sources>
             <references>
-                <include name="../bin/IKVM.OpenJDK.Core.dll" asis="true" />
-                <include name="../bin/IKVM.OpenJDK.Util.dll" asis="true" />
-                <include name="../bin/IKVM.Runtime.dll" asis="true" />
+                <includes name="../bin/classpath.dll" asis="true" />
+                <includes name="../bin/IK.VM.NET.dll" asis="true" />
             </references>
         </csc>
     </target>

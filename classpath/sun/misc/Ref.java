@@ -24,7 +24,7 @@
 
 package sun.misc;
 
-import cli.System.WeakReference;
+import system.WeakReference;
 
 public abstract class Ref
 {
