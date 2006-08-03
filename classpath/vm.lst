@@ -1,9 +1,9 @@
-../../classpath/vm/reference/java/io/VMObjectStreamClass.java
-../../classpath/vm/reference/java/lang/reflect/VMArray.java
-../../classpath/vm/reference/java/lang/VMCompiler.java
-../../classpath/vm/reference/java/lang/VMObject.java
-../../classpath/vm/reference/java/lang/VMString.java
-../../classpath/vm/reference/java/lang/VMThrowable.java
+../../classpath-0.92/vm/reference/java/io/VMObjectStreamClass.java
+../../classpath-0.92/vm/reference/java/lang/reflect/VMArray.java
+../../classpath-0.92/vm/reference/java/lang/VMCompiler.java
+../../classpath-0.92/vm/reference/java/lang/VMObject.java
+../../classpath-0.92/vm/reference/java/lang/VMString.java
+../../classpath-0.92/vm/reference/java/lang/VMThrowable.java
 AssemblyInfo.java
 gnu/classpath/Configuration.java
 gnu/classpath/Pointer.java
