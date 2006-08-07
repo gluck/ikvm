@@ -4324,6 +4324,7 @@ namespace IKVM.Internal
 					Hashtable invokespecialstubcache = new Hashtable();
 					bool basehasclinit = wrapper.BaseTypeWrapper != null && wrapper.BaseTypeWrapper.HasStaticInitializer;
 					bool hasclinit = false;
+					bool hasConstructor = false;
 					for(int i = 0; i < classFile.Methods.Length; i++)
 					{
 						ClassFile.Method m = classFile.Methods[i];
@@ -4332,12 +4333,19 @@ namespace IKVM.Internal
 						{
 							ILGenerator ilGenerator = ((ConstructorBuilder)mb).GetILGenerator();
 							TraceHelper.EmitMethodTrace(ilGenerator, classFile.Name + "." + m.Name + m.Signature);
-							if(basehasclinit && m.IsClassInitializer && !classFile.IsInterface)
+							if(m.IsClassInitializer)
 							{
-								hasclinit = true;
-								// before we call the base class initializer, we need to set the non-final static ConstantValue fields
-								EmitConstantValueInitialization(ilGenerator);
-								wrapper.BaseTypeWrapper.EmitRunClassConstructor(ilGenerator);
+								if(basehasclinit && !classFile.IsInterface)
+								{
+									hasclinit = true;
+									// before we call the base class initializer, we need to set the non-final static ConstantValue fields
+									EmitConstantValueInitialization(ilGenerator);
+									wrapper.BaseTypeWrapper.EmitRunClassConstructor(ilGenerator);
+								}
+							}
+							else
+							{
+								hasConstructor = true;
 							}
 							LineNumberTableAttribute.LineNumberWriter lineNumberTable = null;
 							bool nonLeaf = false;
@@ -4524,6 +4532,15 @@ namespace IKVM.Internal
 								}
 								ilGenerator.Emit(OpCodes.Ret);
 							}
+						}
+						// if a class has no constructor, we generate one (otherwise Ref.Emit will create a default ctor
+						// and that will potentially be public [and it may also trigger a TypeResolve event])
+						if(!hasConstructor)
+						{
+							ConstructorBuilder cb = typeBuilder.DefineConstructor(MethodAttributes.PrivateScope, CallingConventions.Standard, Type.EmptyTypes);
+							ILGenerator ilgen = cb.GetILGenerator();
+							ilgen.Emit(OpCodes.Ldnull);
+							ilgen.Emit(OpCodes.Throw);
 						}
 
 						// here we loop thru all the interfaces to explicitly implement any methods that we inherit from
