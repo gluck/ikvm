@@ -38,8 +38,7 @@ public final class WeakIdentityMap
         {
             keys[i] = new WeakReference(null, true);
             // NOTE we suppress finalization, to make sure the WeakReference continues to work
-            // while the AppDomain is finalizing for unload (note that for this to work,
-            // the code that instantiates us also has to call SuppressFinalize on us.)
+            // while the AppDomain is finalizing for unload
             GC.SuppressFinalize(keys[i]);
         }
     }
@@ -53,6 +52,21 @@ public final class WeakIdentityMap
                 GC.ReRegisterForFinalize(keys[i]);
             }
         }
+    }
+
+    public synchronized Object remove(Object key)
+    {
+        for (int i = 0; i < keys.length; i++)
+        {
+            if (keys[i].get_Target() == key)
+            {
+		Object value = values[i];
+		keys[i].set_Target(null);
+		values[i] = null;
+                return value;
+            }
+        }
+        return null;
     }
 
     // Note that null values are supported, null keys are not
