@@ -115,7 +115,7 @@ namespace IKVM.Internal
 							Annotation annotation = Annotation.Load(classLoader, def);
 							if(annotation != null)
 							{
-								annotation.Apply(classLoader, pbs[i], def);
+								annotation.Apply(pbs[i], def);
 							}
 						}
 					}
@@ -785,6 +785,15 @@ namespace IKVM.Internal
 					ilgen.Emit(OpCodes.Call, typeof(Type).GetMethod("GetTypeFromHandle"));
 					ilgen.Emit(OpCodes.Ldloc, localType);
 					ilgen.Emit(OpCodes.Callvirt, typeof(Type).GetMethod("IsAssignableFrom"));
+					skip = ilgen.DefineLabel();
+					ilgen.Emit(OpCodes.Brfalse_S, skip);
+					ilgen.Emit(OpCodes.Ldc_I4_1);
+					ilgen.Emit(OpCodes.Ret);
+					ilgen.MarkLabel(skip);
+					ilgen.Emit(OpCodes.Ldtoken, typeof(object));
+					ilgen.Emit(OpCodes.Call, typeof(Type).GetMethod("GetTypeFromHandle"));
+					ilgen.Emit(OpCodes.Ldloc, localType);
+					ilgen.Emit(OpCodes.Ceq);
 					ilgen.Emit(OpCodes.Ret);
 						
 					// Implement the "Cast" method
