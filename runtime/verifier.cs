@@ -2599,6 +2599,10 @@ class MethodAnalyzer
 									break;
 								case NormalizedByteCode.__jsr:
 								{
+									if((instr.flags & InstructionFlags.JsrHasRet) != 0)
+									{
+										state[i + 1] += s;
+									}
 									int index = method.PcIndexMap[instr.PC + instr.Arg1];
 									s.SetSubroutineId(index);
 									TypeWrapper retAddressType;
@@ -2623,6 +2627,7 @@ class MethodAnalyzer
 									for(int j = 0; j < cs.Length; j++)
 									{
 										state[cs[j] + 1] = InstructionState.Merge(state[cs[j] + 1], s, locals_modified, state[cs[j]]);
+										instructions[cs[j]].flags |= InstructionFlags.JsrHasRet;
 									}
 									break;
 								}
