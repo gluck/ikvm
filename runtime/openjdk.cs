@@ -4542,12 +4542,12 @@ namespace IKVM.NativeCode.java
 					pi.privileged_context = context;
 					pi.protection_domain = GetProtectionDomainFromType(caller);
 					jsPrivilegedAction pa = action as jsPrivilegedAction;
-					if (pa != null)
-					{
-						return pa.run();
-					}
 					try
 					{
+						if (pa != null)
+						{
+							return pa.run();
+						}
 						return ((jsPrivilegedExceptionAction)action).run();
 					}
 					catch (Exception x)

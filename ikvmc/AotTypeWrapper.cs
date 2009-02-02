@@ -506,6 +506,11 @@ namespace IKVM.Internal
 							// are we adding a new constructor?
 							if(GetMethodWrapper(StringConstants.INIT, constructor.Sig, false) == null)
 							{
+								if(constructor.body == null)
+								{
+									Console.Error.WriteLine("Error: Constructor {0}.<init>{1} in xml remap file doesn't have a body.", clazz.Name, constructor.Sig);
+									continue;
+								}
 								bool setmodifiers = false;
 								MethodAttributes attribs = 0;
 								MapModifiers(constructor.Modifiers, true, out setmodifiers, ref attribs);
@@ -854,7 +859,10 @@ namespace IKVM.Internal
 					ilgen.Emit(OpCodes.Ldarg_1);
 					ilgen.Emit(OpCodes.Call, ghostIsInstanceArrayMethod);
 					ilgen.Emit(OpCodes.Brtrue_S, end);
-					EmitHelper.Throw(ilgen, "java.lang.ClassCastException");
+					ilgen.Emit(OpCodes.Ldarg_0);
+					ilgen.Emit(OpCodes.Ldtoken, typeBuilder);
+					ilgen.Emit(OpCodes.Ldarg_1);
+					ilgen.Emit(OpCodes.Call, StaticCompiler.GetType("IKVM.Runtime.GhostTag").GetMethod("ThrowClassCastException", BindingFlags.NonPublic | BindingFlags.Static));
 					ilgen.MarkLabel(end);
 					ilgen.Emit(OpCodes.Ret);
 
