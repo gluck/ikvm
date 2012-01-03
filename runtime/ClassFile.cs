@@ -1306,6 +1306,10 @@ namespace IKVM.Internal
 				name = classFile.GetConstantPoolUtf8String(name_index);
 				if(name.Length > 0)
 				{
+					// We don't enforce the strict class name rules in the static compiler, since HotSpot doesn't enforce *any* rules on
+					// class names for the system (and boot) class loader. We still need to enforce the 1.5 restrictions, because we
+					// rely on those invariants.
+#if !STATIC_COMPILER
 					if(classFile.MajorVersion < 49)
 					{
 						char prev = name[0];
@@ -1342,6 +1346,7 @@ namespace IKVM.Internal
 						}
 					}
 					else
+#endif
 					{
 						// since 1.5 the restrictions on class names have been greatly reduced
 						int end = name.Length;
@@ -2448,17 +2453,8 @@ namespace IKVM.Internal
 		{
 			private Code code;
 			private string[] exceptions;
-			private LowFreqData low;
-
-			sealed class LowFreqData
-			{
-				internal object annotationDefault;
-				internal object[][] parameterAnnotations;
-#if STATIC_COMPILER
-				internal string DllExportName;
-				internal int DllExportOrdinal;
-#endif
-			}
+			private object annotationDefault;
+			private object[][] parameterAnnotations;
 
 			internal Method(ClassFile classFile, ClassFileParseOptions options, BigEndianBinaryReader br) : base(classFile, br)
 			{
@@ -2550,20 +2546,16 @@ namespace IKVM.Internal
 							{
 								goto default;
 							}
-							if(low == null)
-							{
-								low = new LowFreqData();
-							}
 							BigEndianBinaryReader rdr = br.Section(br.ReadUInt32());
 							byte num_parameters = rdr.ReadByte();
-							low.parameterAnnotations = new object[num_parameters][];
+							parameterAnnotations = new object[num_parameters][];
 							for(int j = 0; j < num_parameters; j++)
 							{
 								ushort num_annotations = rdr.ReadUInt16();
-								low.parameterAnnotations[j] = new object[num_annotations];
+								parameterAnnotations[j] = new object[num_annotations];
 								for(int k = 0; k < num_annotations; k++)
 								{
-									low.parameterAnnotations[j][k] = ReadAnnotation(rdr, classFile);
+									parameterAnnotations[j][k] = ReadAnnotation(rdr, classFile);
 								}
 							}
 							if(!rdr.IsAtEnd)
@@ -2578,12 +2570,8 @@ namespace IKVM.Internal
 							{
 								goto default;
 							}
-							if(low == null)
-							{
-								low = new LowFreqData();
-							}
 							BigEndianBinaryReader rdr = br.Section(br.ReadUInt32());
-							low.annotationDefault = ReadAnnotationElementValue(rdr, classFile);
+							annotationDefault = ReadAnnotationElementValue(rdr, classFile);
 							if(!rdr.IsAtEnd)
 							{
 								throw new ClassFormatError("{0} (AnnotationDefault attribute has wrong length)", classFile.Name);
@@ -2613,38 +2601,6 @@ namespace IKVM.Internal
 								if(annot[1].Equals("Likvm/internal/HasCallerID;"))
 								{
 									flags |= FLAG_HAS_CALLERID;
-								}
-								if(annot[1].Equals("Likvm/lang/DllExport;"))
-								{
-									string name = null;
-									int? ordinal = null;
-									for (int j = 2; j < annot.Length; j += 2)
-									{
-										if (annot[j].Equals("name") && annot[j + 1] is string)
-										{
-											name = (string)annot[j + 1];
-										}
-										else if (annot[j].Equals("ordinal") && annot[j + 1] is int)
-										{
-											ordinal = (int)annot[j + 1];
-										}
-									}
-									if (name != null && ordinal != null)
-									{
-										if (!IsStatic)
-										{
-											StaticCompiler.IssueMessage(Message.DllExportMustBeStaticMethod, classFile.Name, this.Name, this.Signature);
-										}
-										else
-										{
-											if (low == null)
-											{
-												low = new LowFreqData();
-											}
-											low.DllExportName = name;
-											low.DllExportOrdinal = ordinal.Value;
-										}
-									}
 								}
 							}
 							break;
@@ -2721,7 +2677,7 @@ namespace IKVM.Internal
 			{
 				get
 				{
-					return low == null ? null : low.parameterAnnotations;
+					return parameterAnnotations;
 				}
 			}
 
@@ -2729,27 +2685,9 @@ namespace IKVM.Internal
 			{
 				get
 				{
-					return low == null ? null : low.annotationDefault;
+					return annotationDefault;
 				}
 			}
-
-#if STATIC_COMPILER
-			internal string DllExportName
-			{
-				get
-				{
-					return low == null ? null : low.DllExportName;
-				}
-			}
-
-			internal int DllExportOrdinal
-			{
-				get
-				{
-					return low == null ? -1 : low.DllExportOrdinal;
-				}
-			}
-#endif
 
 			internal string VerifyError
 			{

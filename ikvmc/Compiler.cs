@@ -288,8 +288,8 @@ class IkvmcCompiler
 		Console.Error.WriteLine("    -target:winexe             Build a windows executable");
 		Console.Error.WriteLine("    -target:library            Build a library");
 		Console.Error.WriteLine("    -target:module             Build a module for use by the linker");
-		Console.Error.WriteLine("    -platform:<string>         Limit which platforms this code can run on:");
-		Console.Error.WriteLine("                               x86, x64, arm, anycpu32bitpreferred, or");
+		Console.Error.WriteLine("    -platform:<string>         Limit which platforms this code can run on: x86,");
+		Console.Error.WriteLine("                               Itanium, x64, arm, anycpu32bitpreferred, or");
 		Console.Error.WriteLine("                               anycpu. The default is anycpu.");
 		Console.Error.WriteLine("    -keyfile:<keyfilename>     Use keyfile to sign the assembly");
 		Console.Error.WriteLine("    -key:<keycontainer>        Use keycontainer to sign the assembly");
@@ -438,6 +438,10 @@ class IkvmcCompiler
 							options.pekind = PortableExecutableKinds.ILOnly | PortableExecutableKinds.Required32Bit;
 							options.imageFileMachine = ImageFileMachine.I386;
 							break;
+						case "-platform:Itanium":
+							options.pekind = PortableExecutableKinds.ILOnly | PortableExecutableKinds.PE32Plus;
+							options.imageFileMachine = ImageFileMachine.IA64;
+							break;
 						case "-platform:x64":
 							options.pekind = PortableExecutableKinds.ILOnly | PortableExecutableKinds.PE32Plus;
 							options.imageFileMachine = ImageFileMachine.AMD64;
@@ -575,6 +579,11 @@ class IkvmcCompiler
 				else if(s.StartsWith("-resource:"))
 				{
 					string[] spec = s.Substring(10).Split('=');
+					if(spec.Length != 2)
+					{
+						Console.Error.WriteLine("Error: invalid option: {0}", s);
+						return 1;
+					}
 					try
 					{
 						using(FileStream fs = new FileStream(spec[1], FileMode.Open, FileAccess.Read))
@@ -599,6 +608,11 @@ class IkvmcCompiler
 				else if(s.StartsWith("-externalresource:"))
 				{
 					string[] spec = s.Substring(18).Split('=');
+					if(spec.Length != 2)
+					{
+						Console.Error.WriteLine("Error: invalid option: {0}", s);
+						return 1;
+					}
 					if(!File.Exists(spec[1]))
 					{
 						Console.Error.WriteLine("Error: external resource file does not exist: {0}", spec[1]);
@@ -1065,7 +1079,14 @@ class IkvmcCompiler
 						{
 							if(line.StartsWith("Main-Class: "))
 							{
-								manifestMainClass = line.Substring(12).Replace('/', '.');
+								line = line.Substring(12);
+								string continuation;
+								while((continuation = rdr.ReadLine()) != null
+									&& continuation.StartsWith(" ", StringComparison.Ordinal))
+								{
+									line += continuation.Substring(1);
+								}
+								manifestMainClass = line.Replace('/', '.');
 								break;
 							}
 						}

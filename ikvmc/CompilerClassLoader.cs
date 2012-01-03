@@ -3276,24 +3276,6 @@ namespace IKVM.Internal
 		{
 			StaticCompiler.IssueMessage(options, msgId, values);
 		}
-
-		internal bool TryEnableUnmanagedExports()
-		{
-			// we only support -platform:x86 and -platform:x64
-			// (currently IKVM.Reflection doesn't support unmanaged exports for ARM)
-			if ((options.imageFileMachine == ImageFileMachine.I386 && (options.pekind & PortableExecutableKinds.Required32Bit) != 0)
-				|| options.imageFileMachine == ImageFileMachine.AMD64)
-			{
-				// when you add unmanaged exports, the ILOnly flag MUST NOT be set or the DLL will fail to load
-				options.pekind &= ~PortableExecutableKinds.ILOnly;
-				return true;
-			}
-			else
-			{
-				StaticCompiler.IssueMessage(Message.DllExportRequiresSupportedPlatform, options.assembly);
-				return false;
-			}
-		}
 	}
 
 	struct ResourceItem
@@ -3421,8 +3403,6 @@ namespace IKVM.Internal
 		LegacySearchRule = 126,
 		AssemblyLocationIgnored = 127,
 		InterfaceMethodCantBeInternal = 128,
-		DllExportMustBeStaticMethod = 129,
-		DllExportRequiresSupportedPlatform = 130,
 		UnknownWarning = 999,
 		// This is where the errors start
 		StartErrors = 4000,
@@ -3641,14 +3621,6 @@ namespace IKVM.Internal
 					msg = "ignoring @ikvm.lang.Internal annotation on interface method" + Environment.NewLine +
 						"    (\"{0}.{1}{2}\")";
 					break;
-				case Message.DllExportMustBeStaticMethod:
-					msg = "ignoring @ikvm.lang.DllExport annotation on non-static method" + Environment.NewLine +
-						"    (\"{0}.{1}{2}\")";
-					break;
-				case Message.DllExportRequiresSupportedPlatform:
-					msg = "ignoring @ikvm.lang.DllExport annotation due to unsupported target platform" + Environment.NewLine +
-						"	(\"{0}\")";
-					break;
 				case Message.UnableToCreateProxy:
 					msg = "unable to create proxy \"{0}\"" + Environment.NewLine +
 						"    (\"{1}\")";
@@ -3669,11 +3641,11 @@ namespace IKVM.Internal
 					throw new InvalidProgramException();
 			}
 			bool error = msgId >= Message.StartErrors
-				|| options.warnaserror
+				|| (options.warnaserror && msgId >= Message.StartWarnings)
 				|| options.errorWarnings.ContainsKey(key)
 				|| options.errorWarnings.ContainsKey(((int)msgId).ToString());
 			Console.Error.Write("{0} IKVMC{1:D4}: ", error ? "Error" : msgId < Message.StartWarnings ? "Note" : "Warning", (int)msgId);
-			if (error && msgId < Message.StartErrors)
+			if (error && Message.StartWarnings <= msgId && msgId < Message.StartErrors)
 			{
 				Console.Error.Write("Warning as Error: ");
 			}
