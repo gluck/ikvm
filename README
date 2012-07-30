@@ -1,3 +1,11 @@
 Clone of CVS repository of IKVM (from Jeroen Frijters).
 
 CVS HEAD is mapped to origin branch.
+
+Commands used for converting/sync'ing:
+	rsync -av rsync://ikvm.cvs.sourceforge.net/cvsroot/ikvm/ /tmp/ikvm
+	cvsps --norc -z 1200 -x --cvs-direct -x -A --root /tmp/ikvm ikvm > log.txt
+	# For the initial push, I manipulated the log to remove useless commit messages,
+	#  to cleanup the history a bit...
+	git cvsimport -d /tmp/ikvm -v -P log.txt -C ikvm.git -u -z 1200 -A authors -k ikvm
+
