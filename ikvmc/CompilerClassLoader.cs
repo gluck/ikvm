@@ -1283,7 +1283,13 @@ namespace IKVM.Internal
 							argTypes[0] = typeWrapper.shadowType;
 							if(typeWrapper.helperTypeBuilder == null)
 							{
-								typeWrapper.helperTypeBuilder = typeWrapper.typeBuilder.DefineNestedType("__Helper", TypeAttributes.NestedPublic | TypeAttributes.Class | TypeAttributes.Sealed | TypeAttributes.Abstract);
+								// FXBUG we use a nested helper class, because Reflection.Emit won't allow us to add a static method to the interface
+								// TODO now that we're on Whidbey we can remove this workaround
+								typeWrapper.helperTypeBuilder = typeWrapper.typeBuilder.DefineNestedType("__Helper", TypeAttributes.NestedPublic | TypeAttributes.Class | TypeAttributes.Sealed);
+								ilgen = CodeEmitter.Create(typeWrapper.helperTypeBuilder.DefineConstructor(MethodAttributes.Private, CallingConventions.Standard, Type.EmptyTypes));
+								ilgen.Emit(OpCodes.Ldnull);
+								ilgen.Emit(OpCodes.Throw);
+								ilgen.DoEmit();
 								AttributeHelper.HideFromJava(typeWrapper.helperTypeBuilder);
 							}
 							helper = typeWrapper.helperTypeBuilder.DefineMethod(m.Name, MethodAttributes.HideBySig | MethodAttributes.Public | MethodAttributes.Static, typeWrapper.GetClassLoader().RetTypeWrapperFromSig(m.Sig).TypeAsSignatureType, argTypes);
@@ -1936,11 +1942,11 @@ namespace IKVM.Internal
 						PropertyBuilder pb = typeBuilder.DefineProperty(pi.Name, PropertyAttributes.None, pi.PropertyType, paramTypes);
 						if(pi.GetGetMethod() != null)
 						{
-							pb.SetGetMethod(methods[MakeMethodKey(pi.GetGetMethod())]);
+							pb.SetGetMethod((MethodBuilder)methods[MakeMethodKey(pi.GetGetMethod())]);
 						}
 						if(pi.GetSetMethod() != null)
 						{
-							pb.SetSetMethod(methods[MakeMethodKey(pi.GetSetMethod())]);
+							pb.SetSetMethod((MethodBuilder)methods[MakeMethodKey(pi.GetSetMethod())]);
 						}
 						AttributeHelper.SetEditorBrowsableNever(pb);
 					}
@@ -2165,7 +2171,7 @@ namespace IKVM.Internal
 			}
 		}
 
-		internal static void AddDeclaredExceptions(MethodBuilder mb, IKVM.Internal.MapXml.Throws[] throws)
+		internal static void AddDeclaredExceptions(MethodBase mb, IKVM.Internal.MapXml.Throws[] throws)
 		{
 			if (throws != null)
 			{
