@@ -58,7 +58,7 @@ namespace IKVM.Internal
 #if !STATIC_COMPILER
 		private byte[][] lineNumberTables;
 #endif
-		private MethodBase automagicSerializationCtor;
+		private ConstructorInfo automagicSerializationCtor;
 
 		private static TypeWrapper LoadTypeWrapper(ClassLoaderWrapper classLoader, string name)
 		{
@@ -916,7 +916,7 @@ namespace IKVM.Internal
 
 			private sealed class DelegateConstructorMethodWrapper : MethodWrapper
 			{
-				private MethodBuilder constructor;
+				private ConstructorBuilder constructor;
 				private MethodInfo invoke;
 
 				internal DelegateConstructorMethodWrapper(DynamicTypeWrapper tw, ClassFile.Method m)
@@ -927,7 +927,7 @@ namespace IKVM.Internal
 				internal void DoLink(TypeBuilder typeBuilder)
 				{
 					MethodAttributes attribs = MethodAttributes.HideBySig | MethodAttributes.Public;
-					constructor = ReflectUtil.DefineConstructor(typeBuilder, attribs, new Type[] { Types.Object, Types.IntPtr });
+					constructor = typeBuilder.DefineConstructor(attribs, CallingConventions.Standard, new Type[] { Types.Object, Types.IntPtr }, null, null);
 					constructor.SetImplementationFlags(MethodImplAttributes.Runtime);
 					MethodWrapper mw = GetParameters()[0].GetMethods()[0];
 					mw.Link();
@@ -1451,11 +1451,11 @@ namespace IKVM.Internal
 #endif
 
 					field = DefineField(realFieldName, fw.FieldTypeWrapper, attribs, fld.IsVolatile);
-					if (fld.IsTransient)
-					{
-						CustomAttributeBuilder transientAttrib = new CustomAttributeBuilder(JVM.Import(typeof(NonSerializedAttribute)).GetConstructor(Type.EmptyTypes), new object[0]);
-						field.SetCustomAttribute(transientAttrib);
-					}
+				}
+				if (fld.IsTransient)
+				{
+					CustomAttributeBuilder transientAttrib = new CustomAttributeBuilder(JVM.Import(typeof(NonSerializedAttribute)).GetConstructor(Type.EmptyTypes), new object[0]);
+					field.SetCustomAttribute(transientAttrib);
 				}
 #if STATIC_COMPILER
 				{
@@ -1707,7 +1707,7 @@ namespace IKVM.Internal
 				private TypeBuilder outer;
 				private TypeBuilder annotationTypeBuilder;
 				private TypeBuilder attributeTypeBuilder;
-				private MethodBuilder defineConstructor;
+				private ConstructorBuilder defineConstructor;
 
 				internal AnnotationBuilder(JavaTypeImpl o, TypeBuilder outer)
 				{
@@ -1869,7 +1869,7 @@ namespace IKVM.Internal
 						}
 					}
 
-					defineConstructor = ReflectUtil.DefineConstructor(attributeTypeBuilder, MethodAttributes.Public, new Type[] { JVM.Import(typeof(object[])) });
+					defineConstructor = attributeTypeBuilder.DefineConstructor(MethodAttributes.Public, CallingConventions.Standard, new Type[] { JVM.Import(typeof(object[])) });
 					AttributeHelper.SetEditorBrowsableNever(defineConstructor);
 				}
 
@@ -1974,7 +1974,7 @@ namespace IKVM.Internal
 						}
 					}
 
-					MethodBuilder defaultConstructor = ReflectUtil.DefineConstructor(attributeTypeBuilder, unsupported || requiredArgCount > 0 ? MethodAttributes.Private : MethodAttributes.Public, Type.EmptyTypes);
+					ConstructorBuilder defaultConstructor = attributeTypeBuilder.DefineConstructor(unsupported || requiredArgCount > 0 ? MethodAttributes.Private : MethodAttributes.Public, CallingConventions.Standard, Type.EmptyTypes);
 					CodeEmitter ilgen;
 
 					if (!unsupported)
@@ -1992,7 +1992,7 @@ namespace IKVM.Internal
 									}
 								}
 							}
-							MethodBuilder reqArgConstructor = ReflectUtil.DefineConstructor(attributeTypeBuilder, MethodAttributes.Public, args);
+							ConstructorBuilder reqArgConstructor = attributeTypeBuilder.DefineConstructor(MethodAttributes.Public, CallingConventions.Standard, args);
 							AttributeHelper.HideFromJava(reqArgConstructor);
 							ilgen = CodeEmitter.Create(reqArgConstructor);
 							ilgen.Emit(OpCodes.Ldarg_0);
@@ -2019,7 +2019,7 @@ namespace IKVM.Internal
 							Type argType = TypeWrapperToAnnotationParameterType(o.methods[valueArg].ReturnType);
 							if (argType != null)
 							{
-								MethodBuilder cb = ReflectUtil.DefineConstructor(attributeTypeBuilder, MethodAttributes.Public, new Type[] { argType });
+								ConstructorBuilder cb = attributeTypeBuilder.DefineConstructor(MethodAttributes.Public, CallingConventions.Standard, new Type[] { argType });
 								AttributeHelper.HideFromJava(cb);
 								cb.DefineParameter(1, ParameterAttributes.None, "value");
 								ilgen = CodeEmitter.Create(cb);
@@ -2150,7 +2150,7 @@ namespace IKVM.Internal
 					if (annotationTypeBuilder != null)
 					{
 						annotation = QualifyClassNames(loader, annotation);
-						tb.SetCustomAttribute(new CustomAttributeBuilder(defineConstructor.__AsConstructorInfo(), new object[] { annotation }));
+						tb.SetCustomAttribute(new CustomAttributeBuilder(defineConstructor, new object[] { annotation }));
 					}
 				}
 
@@ -2160,7 +2160,17 @@ namespace IKVM.Internal
 					if (annotationTypeBuilder != null)
 					{
 						annotation = QualifyClassNames(loader, annotation);
-						mb.SetCustomAttribute(new CustomAttributeBuilder(defineConstructor.__AsConstructorInfo(), new object[] { annotation }));
+						mb.SetCustomAttribute(new CustomAttributeBuilder(defineConstructor, new object[] { annotation }));
+					}
+				}
+
+				internal override void Apply(ClassLoaderWrapper loader, ConstructorBuilder cb, object annotation)
+				{
+					Link();
+					if (annotationTypeBuilder != null)
+					{
+						annotation = QualifyClassNames(loader, annotation);
+						cb.SetCustomAttribute(new CustomAttributeBuilder(defineConstructor, new object[] { annotation }));
 					}
 				}
 
@@ -2170,7 +2180,7 @@ namespace IKVM.Internal
 					if (annotationTypeBuilder != null)
 					{
 						annotation = QualifyClassNames(loader, annotation);
-						fb.SetCustomAttribute(new CustomAttributeBuilder(defineConstructor.__AsConstructorInfo(), new object[] { annotation }));
+						fb.SetCustomAttribute(new CustomAttributeBuilder(defineConstructor, new object[] { annotation }));
 					}
 				}
 
@@ -2180,7 +2190,7 @@ namespace IKVM.Internal
 					if (annotationTypeBuilder != null)
 					{
 						annotation = QualifyClassNames(loader, annotation);
-						pb.SetCustomAttribute(new CustomAttributeBuilder(defineConstructor.__AsConstructorInfo(), new object[] { annotation }));
+						pb.SetCustomAttribute(new CustomAttributeBuilder(defineConstructor, new object[] { annotation }));
 					}
 				}
 
@@ -2190,7 +2200,7 @@ namespace IKVM.Internal
 					if (annotationTypeBuilder != null)
 					{
 						annotation = QualifyClassNames(loader, annotation);
-						ab.SetCustomAttribute(new CustomAttributeBuilder(defineConstructor.__AsConstructorInfo(), new object[] { annotation }));
+						ab.SetCustomAttribute(new CustomAttributeBuilder(defineConstructor, new object[] { annotation }));
 					}
 				}
 
@@ -2200,7 +2210,7 @@ namespace IKVM.Internal
 					if (annotationTypeBuilder != null)
 					{
 						annotation = QualifyClassNames(loader, annotation);
-						pb.SetCustomAttribute(new CustomAttributeBuilder(defineConstructor.__AsConstructorInfo(), new object[] { annotation }));
+						pb.SetCustomAttribute(new CustomAttributeBuilder(defineConstructor, new object[] { annotation }));
 					}
 				}
 
@@ -2733,7 +2743,7 @@ namespace IKVM.Internal
 						}
 					}
 					ClassFile.Method m = classFile.Methods[index];
-					MethodBuilder method;
+					MethodBase method;
 					bool setModifiers = false;
 					if (methods[index].HasCallerID && (m.Modifiers & Modifiers.VarArgs) != 0)
 					{
@@ -2764,14 +2774,28 @@ namespace IKVM.Internal
 					AttributeHelper.SetThrowsAttribute(method, exceptions);
 					if (setModifiers || m.IsInternal || (m.Modifiers & (Modifiers.Synthetic | Modifiers.Bridge)) != 0)
 					{
-						AttributeHelper.SetModifiers(method, m.Modifiers, m.IsInternal);
+						if (method is ConstructorBuilder)
+						{
+							AttributeHelper.SetModifiers((ConstructorBuilder)method, m.Modifiers, m.IsInternal);
+						}
+						else
+						{
+							AttributeHelper.SetModifiers((MethodBuilder)method, m.Modifiers, m.IsInternal);
+						}
 					}
 					if ((m.Modifiers & (Modifiers.Synthetic | Modifiers.Bridge)) != 0
 						&& (m.IsPublic || m.IsProtected)
 						&& wrapper.IsPublic
 						&& !IsAccessBridge(classFile, m))
 					{
-						AttributeHelper.SetEditorBrowsableNever(method);
+						if (method is ConstructorBuilder)
+						{
+							AttributeHelper.SetEditorBrowsableNever((ConstructorBuilder)method);
+						}
+						else
+						{
+							AttributeHelper.SetEditorBrowsableNever((MethodBuilder)method);
+						}
 						// TODO on WHIDBEY apply CompilerGeneratedAttribute
 					}
 					if (m.DeprecatedAttribute)
@@ -2796,14 +2820,14 @@ namespace IKVM.Internal
 				}
 			}
 
-			private MethodBuilder GenerateConstructor(MethodWrapper mw)
+			private MethodBase GenerateConstructor(MethodWrapper mw)
 			{
 				MethodBuilder cb = mw.GetDefineMethodHelper().DefineConstructor(wrapper, typeBuilder, GetMethodAccess(mw) | MethodAttributes.HideBySig);
 				cb.SetImplementationFlags(MethodImplAttributes.NoInlining);
 				return cb;
 			}
 
-			private MethodBuilder GenerateMethod(int index, ClassFile.Method m, ref bool setModifiers)
+			private MethodBase GenerateMethod(int index, ClassFile.Method m, ref bool setModifiers)
 			{
 				MethodAttributes attribs = MethodAttributes.HideBySig;
 				if (m.IsNative)
@@ -3522,7 +3546,7 @@ namespace IKVM.Internal
 			private List<TypeBuilder> nestedTypeBuilders;
 			private MethodInfo callerIDMethod;
 			private List<Item> items;
-			private Dictionary<FieldWrapper, MethodBuilder> arfuMap;
+			private Dictionary<FieldWrapper, ConstructorBuilder> arfuMap;
 
 			private struct Item
 			{
@@ -3686,7 +3710,7 @@ namespace IKVM.Internal
 				for (int i = 0; i < classFile.Methods.Length; i++)
 				{
 					ClassFile.Method m = classFile.Methods[i];
-					MethodBuilder mb = (MethodBuilder)methods[i].GetMethod();
+					MethodBase mb = methods[i].GetMethod();
 					if (mb == null)
 					{
 						// method doesn't really exist (e.g. delegate constructor or <clinit> that is optimized away)
@@ -3705,7 +3729,7 @@ namespace IKVM.Internal
 					else if (m.IsConstructor)
 					{
 						hasConstructor = true;
-						CodeEmitter ilGenerator = CodeEmitter.Create(mb);
+						CodeEmitter ilGenerator = CodeEmitter.Create((MethodBuilder)mb);
 						CompileConstructorBody(this, ilGenerator, i, invokespecialstubcache);
 					}
 					else
@@ -3727,7 +3751,7 @@ namespace IKVM.Internal
 							}
 							if (stub)
 							{
-								CodeEmitter ilGenerator = CodeEmitter.Create(mb);
+								CodeEmitter ilGenerator = CodeEmitter.Create((MethodBuilder)mb);
 								TraceHelper.EmitMethodTrace(ilGenerator, classFile.Name + "." + m.Name + m.Signature);
 								ilGenerator.EmitThrow("java.lang.AbstractMethodError", classFile.Name + "." + m.Name + m.Signature);
 								ilGenerator.DoEmit();
@@ -3741,13 +3765,13 @@ namespace IKVM.Internal
 							}
 							if (wrapper.IsDelegate)
 							{
-								mb.SetImplementationFlags(mb.GetMethodImplementationFlags() | MethodImplAttributes.Runtime);
+								((MethodBuilder)mb).SetImplementationFlags(mb.GetMethodImplementationFlags() | MethodImplAttributes.Runtime);
 								continue;
 							}
 							Profiler.Enter("JavaTypeImpl.Finish.Native");
 							try
 							{
-								CodeEmitter ilGenerator = CodeEmitter.Create(mb);
+								CodeEmitter ilGenerator = CodeEmitter.Create((MethodBuilder)mb);
 								TraceHelper.EmitMethodTrace(ilGenerator, classFile.Name + "." + m.Name + m.Signature);
 #if STATIC_COMPILER
 								// do we have an implementation in map.xml?
@@ -3853,7 +3877,8 @@ namespace IKVM.Internal
 						}
 						else
 						{
-							CodeEmitter ilGenerator = CodeEmitter.Create(mb);
+							MethodBuilder mbld = (MethodBuilder)mb;
+							CodeEmitter ilGenerator = CodeEmitter.Create(mbld);
 							TraceHelper.EmitMethodTrace(ilGenerator, classFile.Name + "." + m.Name + m.Signature);
 #if STATIC_COMPILER
 							// do we have an implementation in map.xml?
@@ -3869,10 +3894,10 @@ namespace IKVM.Internal
 							ilGenerator.DoEmit();
 							if (nonleaf)
 							{
-								mb.SetImplementationFlags(mb.GetMethodImplementationFlags() | MethodImplAttributes.NoInlining);
+								mbld.SetImplementationFlags(mbld.GetMethodImplementationFlags() | MethodImplAttributes.NoInlining);
 							}
 #if STATIC_COMPILER
-							ilGenerator.EmitLineNumberTable((MethodBuilder)methods[i].GetMethod());
+							ilGenerator.EmitLineNumberTable(methods[i].GetMethod());
 #else // STATIC_COMPILER
 							byte[] linenumbers = ilGenerator.GetLineNumberTable();
 							if (linenumbers != null)
@@ -3932,7 +3957,8 @@ namespace IKVM.Internal
 					// - we don't want the synthesized constructor to show up in Java
 					if (!hasConstructor)
 					{
-						CodeEmitter ilgen = CodeEmitter.Create(ReflectUtil.DefineConstructor(typeBuilder, MethodAttributes.PrivateScope, Type.EmptyTypes));
+						ConstructorBuilder cb = typeBuilder.DefineConstructor(MethodAttributes.PrivateScope, CallingConventions.Standard, Type.EmptyTypes);
+						CodeEmitter ilgen = CodeEmitter.Create(cb);
 						ilgen.Emit(OpCodes.Ldnull);
 						ilgen.Emit(OpCodes.Throw);
 						ilgen.DoEmit();
@@ -3964,10 +3990,7 @@ namespace IKVM.Internal
 					{
 						AddUnsupportedAbstractMethods();
 					}
-					if (!wrapper.GetClassLoader().NoAutomagicSerialization)
-					{
-						wrapper.automagicSerializationCtor = Serialization.AddAutomagicSerialization(wrapper, typeBuilder);
-					}
+					wrapper.automagicSerializationCtor = Serialization.AddAutomagicSerialization(wrapper, typeBuilder);
 				}
 
 #if STATIC_COMPILER
@@ -4000,7 +4023,7 @@ namespace IKVM.Internal
 							FieldBuilder fb = tbFields.DefineField(f.Name, ToPublicSignatureType(fields[i].FieldTypeWrapper), attribs);
 							if (ilgenClinit == null)
 							{
-								ilgenClinit = CodeEmitter.Create(ReflectUtil.DefineTypeInitializer(tbFields));
+								ilgenClinit = CodeEmitter.Create(tbFields.DefineTypeInitializer());
 							}
 							wrapper.GetFieldWrapper(f.Name, f.Signature).EmitGet(ilgenClinit);
 							ilgenClinit.Emit(OpCodes.Stsfld, fb);
@@ -4026,7 +4049,7 @@ namespace IKVM.Internal
 				for (int i = 0; i < classFile.Methods.Length; i++)
 				{
 					ClassFile.Method m = classFile.Methods[i];
-					MethodBuilder mb = (MethodBuilder)methods[i].GetMethod();
+					MethodBase mb = methods[i].GetMethod();
 					if (mb == null)
 					{
 						continue;
@@ -4062,6 +4085,8 @@ namespace IKVM.Internal
 					}
 					wrapper.AddXmlMapParameterAttributes(mb, classFile.Name, m.Name, m.Signature, ref parameterBuilders);
 #endif
+					ConstructorBuilder cb = mb as ConstructorBuilder;
+					MethodBuilder mBuilder = mb as MethodBuilder;
 					if (m.Annotations != null)
 					{
 						foreach (object[] def in m.Annotations)
@@ -4069,8 +4094,15 @@ namespace IKVM.Internal
 							Annotation annotation = Annotation.Load(wrapper.GetClassLoader(), def);
 							if (annotation != null)
 							{
-								annotation.Apply(wrapper.GetClassLoader(), mb, def);
-								annotation.ApplyReturnValue(wrapper.GetClassLoader(), mb, ref returnParameter, def);
+								if (cb != null)
+								{
+									annotation.Apply(wrapper.GetClassLoader(), cb, def);
+								}
+								if (mBuilder != null)
+								{
+									annotation.Apply(wrapper.GetClassLoader(), mBuilder, def);
+									annotation.ApplyReturnValue(wrapper.GetClassLoader(), mBuilder, ref returnParameter, def);
+								}
 							}
 						}
 					}
@@ -4096,12 +4128,12 @@ namespace IKVM.Internal
 #if STATIC_COMPILER
 					if (methods[i].HasCallerID)
 					{
-						AttributeHelper.SetEditorBrowsableNever(mb);
+						AttributeHelper.SetEditorBrowsableNever((MethodBuilder)mb);
 						EmitCallerIDStub(methods[i], parameterNames);
 					}
 					if (m.DllExportName != null && wrapper.classLoader.TryEnableUnmanagedExports())
 					{
-						mb.__AddUnmanagedExport(m.DllExportName, m.DllExportOrdinal);
+						mBuilder.__AddUnmanagedExport(m.DllExportName, m.DllExportOrdinal);
 					}
 #endif // STATIC_COMPILER
 				}
@@ -5211,7 +5243,7 @@ namespace IKVM.Internal
 				Compiler.Compile(context, wrapper, methods[methodIndex], classFile, m, ilGenerator, ref nonLeaf, invokespecialstubcache);
 				ilGenerator.DoEmit();
 #if STATIC_COMPILER
-				ilGenerator.EmitLineNumberTable((MethodBuilder)methods[methodIndex].GetMethod());
+				ilGenerator.EmitLineNumberTable(methods[methodIndex].GetMethod());
 #else // STATIC_COMPILER
 				byte[] linenumbers = ilGenerator.GetLineNumberTable();
 				if (linenumbers != null)
@@ -5268,7 +5300,7 @@ namespace IKVM.Internal
 			{
 				TypeWrapper tw = CoreClasses.ikvm.@internal.CallerID.Wrapper;
 				TypeBuilder typeCallerID = typeBuilder.DefineNestedType("__<CallerID>", TypeAttributes.Sealed | TypeAttributes.NestedPrivate, tw.TypeAsBaseType);
-				MethodBuilder cb = ReflectUtil.DefineConstructor(typeCallerID, MethodAttributes.Assembly, null);
+				ConstructorBuilder cb = typeCallerID.DefineConstructor(MethodAttributes.Assembly, CallingConventions.Standard, null);
 				CodeEmitter ctorIlgen = CodeEmitter.Create(cb);
 				ctorIlgen.Emit(OpCodes.Ldarg_0);
 				MethodWrapper mw = tw.GetMethodWrapper("<init>", "()V", false);
@@ -5337,7 +5369,7 @@ namespace IKVM.Internal
 				}
 			}
 
-			internal MethodBuilder DefineThreadLocalType()
+			internal ConstructorBuilder DefineThreadLocalType()
 			{
 				TypeWrapper threadLocal = ClassLoaderWrapper.LoadClassCritical("ikvm.internal.IntrinsicThreadLocal");
 				int id = nestedTypeBuilders == null ? 0 : nestedTypeBuilders.Count;
@@ -5353,7 +5385,7 @@ namespace IKVM.Internal
 				ilgen.Emit(OpCodes.Ldarg_1);
 				ilgen.Emit(OpCodes.Stsfld, fb);
 				ilgen.Emit(OpCodes.Ret);
-				MethodBuilder cb = ReflectUtil.DefineConstructor(tb, MethodAttributes.Assembly, Type.EmptyTypes);
+				ConstructorBuilder cb = tb.DefineConstructor(MethodAttributes.Assembly, CallingConventions.Standard, Type.EmptyTypes);
 				CodeEmitter ctorilgen = CodeEmitter.Create(cb);
 				ctorilgen.Emit(OpCodes.Ldarg_0);
 				MethodWrapper basector = threadLocal.GetMethodWrapper("<init>", "()V", false);
@@ -5365,19 +5397,19 @@ namespace IKVM.Internal
 				return cb;
 			}
 
-			internal MethodBuilder GetAtomicReferenceFieldUpdater(FieldWrapper field)
+			internal ConstructorBuilder GetAtomicReferenceFieldUpdater(FieldWrapper field)
 			{
 				if (arfuMap == null)
 				{
-					arfuMap = new Dictionary<FieldWrapper, MethodBuilder>();
+					arfuMap = new Dictionary<FieldWrapper, ConstructorBuilder>();
 				}
-				MethodBuilder cb;
+				ConstructorBuilder cb;
 				if (!arfuMap.TryGetValue(field, out cb))
 				{
 					TypeWrapper arfuTypeWrapper = ClassLoaderWrapper.LoadClassCritical("ikvm.internal.IntrinsicAtomicReferenceFieldUpdater");
 					TypeBuilder tb = typeBuilder.DefineNestedType("__<ARFU>_" + arfuMap.Count, TypeAttributes.NestedPrivate | TypeAttributes.Sealed, arfuTypeWrapper.TypeAsBaseType);
 					AtomicReferenceFieldUpdaterEmitter.EmitImpl(tb, field.GetField());
-					cb = ReflectUtil.DefineConstructor(tb, MethodAttributes.Assembly, Type.EmptyTypes);
+					cb = tb.DefineConstructor(MethodAttributes.Assembly, CallingConventions.Standard, Type.EmptyTypes);
 					arfuMap.Add(field, cb);
 					CodeEmitter ctorilgen = CodeEmitter.Create(cb);
 					ctorilgen.Emit(OpCodes.Ldarg_0);
@@ -5608,7 +5640,7 @@ namespace IKVM.Internal
 			}
 		}
 
-		protected static ParameterBuilder[] GetParameterBuilders(MethodBuilder mb, int parameterCount, string[] parameterNames)
+		protected static ParameterBuilder[] GetParameterBuilders(MethodBase mb, int parameterCount, string[] parameterNames)
 		{
 			ParameterBuilder[] parameterBuilders = new ParameterBuilder[parameterCount];
 			Dictionary<string, int> clashes = null;
@@ -5633,7 +5665,15 @@ namespace IKVM.Internal
 						name += clash;
 					}
 				}
-				parameterBuilders[i] = mb.DefineParameter(i + 1, ParameterAttributes.None, name);
+				MethodBuilder mBuilder = mb as MethodBuilder;
+				if (mBuilder != null)
+				{
+					parameterBuilders[i] = mBuilder.DefineParameter(i + 1, ParameterAttributes.None, name);
+				}
+				else
+				{
+					parameterBuilders[i] = ((ConstructorBuilder)mb).DefineParameter(i + 1, ParameterAttributes.None, name);
+				}
 			}
 			return parameterBuilders;
 		}
@@ -5912,7 +5952,7 @@ namespace IKVM.Internal
 		}
 #endif // STATIC_COMPILER
 
-		internal override MethodBase GetSerializationConstructor()
+		internal override ConstructorInfo GetSerializationConstructor()
 		{
 			return automagicSerializationCtor;
 		}

@@ -913,6 +913,10 @@ namespace IKVM.Internal
 			{
 				method = method.Module.ResolveMethod(((MethodBuilder)method).GetToken().Token);
 			}
+			if(method is ConstructorBuilder)
+			{
+				method = method.Module.ResolveMethod(((ConstructorBuilder)method).GetToken().Token);
+			}
 		}
 
 		[HideFromJava]
@@ -1339,12 +1343,14 @@ namespace IKVM.Internal
 			java.lang.reflect.Field field = reflectionField;
 			if (field == null)
 			{
+				const Modifiers ReflectionFieldModifiersMask = Modifiers.Public | Modifiers.Private | Modifiers.Protected | Modifiers.Static
+					| Modifiers.Final | Modifiers.Volatile | Modifiers.Transient | Modifiers.Synthetic | Modifiers.Enum;
 				Link();
 				field = new java.lang.reflect.Field(
 					this.DeclaringType.ClassObject,
 					this.Name,
 					this.FieldTypeWrapper.EnsureLoadable(this.DeclaringType.GetClassLoader()).ClassObject,
-					(int)this.Modifiers | (this.IsInternal ? 0x40000000 : 0),
+					(int)(this.Modifiers & ReflectionFieldModifiersMask) | (this.IsInternal ? 0x40000000 : 0),
 					Array.IndexOf(this.DeclaringType.GetFields(), this),
 					this.DeclaringType.GetGenericFieldSignature(this),
 					null
