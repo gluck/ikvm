@@ -1131,6 +1131,10 @@ namespace IKVM.Internal
 					{
 					}
 
+					internal override void Apply(ClassLoaderWrapper loader, ConstructorBuilder cb, object annotation)
+					{
+					}
+
 					internal override void Apply(ClassLoaderWrapper loader, FieldBuilder fb, object annotation)
 					{
 					}
@@ -1262,6 +1266,15 @@ namespace IKVM.Internal
 						foreach (object ann in UnwrapArray(annotation))
 						{
 							annot.Apply(loader, ab, ann);
+						}
+					}
+
+					internal override void Apply(ClassLoaderWrapper loader, ConstructorBuilder cb, object annotation)
+					{
+						Annotation annot = type.Annotation;
+						foreach (object ann in UnwrapArray(annotation))
+						{
+							annot.Apply(loader, cb, ann);
 						}
 					}
 
@@ -1511,6 +1524,28 @@ namespace IKVM.Internal
 					else
 					{
 						tb.SetCustomAttribute(MakeCustomAttributeBuilder(loader, annotation));
+					}
+				}
+
+				internal override void Apply(ClassLoaderWrapper loader, ConstructorBuilder cb, object annotation)
+				{
+					if (type.IsSubclassOf(Types.SecurityAttribute))
+					{
+#if STATIC_COMPILER
+						cb.__AddDeclarativeSecurity(MakeCustomAttributeBuilder(loader, annotation));
+#elif STUB_GENERATOR
+#else
+						SecurityAction action;
+						PermissionSet permSet;
+						if (MakeDeclSecurity(type, annotation, out action, out permSet))
+						{
+							cb.AddDeclarativeSecurity(action, permSet);
+						}
+#endif
+					}
+					else
+					{
+						cb.SetCustomAttribute(MakeCustomAttributeBuilder(loader, annotation));
 					}
 				}
 
@@ -2176,8 +2211,9 @@ namespace IKVM.Internal
 							InterfaceMapping map = type.GetInterfaceMap(interfaces[i]);
 							for (int j = 0; j < map.InterfaceMethods.Length; j++)
 							{
-								if ((!map.TargetMethods[j].IsPublic || map.TargetMethods[j].Name != map.InterfaceMethods[j].Name)
-									&& map.TargetMethods[j].DeclaringType == type)
+								if (map.TargetMethods[j] == null
+									|| ((!map.TargetMethods[j].IsPublic || map.TargetMethods[j].Name != map.InterfaceMethods[j].Name)
+										&& map.TargetMethods[j].DeclaringType == type))
 								{
 									string name;
 									string sig;
@@ -2309,7 +2345,7 @@ namespace IKVM.Internal
 			if (mb.IsAbstract)
 			{
 				MethodInfo mi = (MethodInfo)mb;
-				if (mi.ReturnType.IsByRef || IsPointerType(mi.ReturnType))
+				if (mi.ReturnType.IsByRef || IsPointerType(mi.ReturnType) || mb.IsGenericMethodDefinition)
 				{
 					return true;
 				}
