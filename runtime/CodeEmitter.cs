@@ -455,11 +455,6 @@ namespace IKVM.Internal
 			return new CodeEmitter(mb.GetILGenerator(), mb.DeclaringType);
 		}
 
-		internal static CodeEmitter Create(ConstructorBuilder cb)
-		{
-			return new CodeEmitter(cb.GetILGenerator(), cb.DeclaringType);
-		}
-
 #if !STATIC_COMPILER
 		internal static CodeEmitter Create(DynamicMethod dm)
 		{
@@ -2525,9 +2520,9 @@ namespace IKVM.Internal
 			EmitOpCode(OpCodes.Unaligned, alignment);
 		}
 
-		internal void Emit(OpCode opcode, ConstructorInfo con)
+		internal void Emit(OpCode opcode, MethodBase mb)
 		{
-			EmitOpCode(opcode, con);
+			EmitOpCode(opcode, mb);
 		}
 
 		internal void EmitLdc_R8(double arg)
@@ -2676,11 +2671,6 @@ namespace IKVM.Internal
 			EmitOpCode(opcode, local);
 		}
 
-		internal void Emit(OpCode opcode, MethodInfo meth)
-		{
-			EmitOpCode(opcode, meth);
-		}
-
 		internal void EmitLdc_R4(float arg)
 		{
 			EmitOpCode(OpCodes.Ldc_R4, arg);
@@ -2745,7 +2735,7 @@ namespace IKVM.Internal
 		}
 
 #if STATIC_COMPILER
-		internal void EmitLineNumberTable(MethodBase mb)
+		internal void EmitLineNumberTable(MethodBuilder mb)
 		{
 			if(linenums != null)
 			{

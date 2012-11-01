@@ -148,6 +148,9 @@ namespace IKVM.Internal
 				{
 					return assembly.GetType(name);
 				}
+				catch (ArgumentException)
+				{
+				}
 				catch (FileLoadException x)
 				{
 					// this can only happen if the assembly was loaded in the ReflectionOnly
@@ -164,6 +167,9 @@ namespace IKVM.Internal
 				try
 				{
 					return mod.GetType(name);
+				}
+				catch (ArgumentException)
+				{
 				}
 				catch (FileLoadException x)
 				{
@@ -345,7 +351,9 @@ namespace IKVM.Internal
 				}
 				foreach (AssemblyName name in internalsVisibleTo)
 				{
-					if (AssemblyName.ReferenceMatchesDefinition(name, otherName))
+					// we match the simple name and PublicKeyToken (because the AssemblyName constructor used
+					// by GetInternalsVisibleToAttributes() only sets the PublicKeyToken, even if a PublicKey is specified)
+					if (ReflectUtil.MatchNameAndPublicKeyToken(name, otherName))
 					{
 						return true;
 					}
@@ -1022,6 +1030,7 @@ namespace IKVM.Internal
 				foreach (KeyValuePair<string, string> kv in customClassLoaderRedirects)
 				{
 					string asm = kv.Key;
+					// FXBUG
 					// We only support matching on the assembly's simple name,
 					// because there appears to be no viable alternative.
 					// There is AssemblyName.ReferenceMatchesDefinition()

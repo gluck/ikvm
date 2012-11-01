@@ -34,7 +34,7 @@ using IKVM.Attributes;
 
 namespace IKVM.Internal
 {
-	class AotTypeWrapper : DynamicTypeWrapper
+	sealed class AotTypeWrapper : DynamicTypeWrapper
 	{
 		private FieldInfo ghostRefField;
 		private MethodBuilder ghostIsInstanceMethod;
@@ -117,7 +117,7 @@ namespace IKVM.Internal
 			private readonly AotTypeWrapper wrapper;
 			private readonly TypeBuilder typeBuilder;
 			private readonly MethodWrapper[] methods;
-			private ConstructorInfo baseSerializationCtor;
+			private MethodBuilder baseSerializationCtor;
 
 			internal WorkaroundBaseClass(AotTypeWrapper wrapper, TypeBuilder typeBuilder, MethodWrapper[] methods)
 			{
@@ -126,7 +126,7 @@ namespace IKVM.Internal
 				this.methods = methods;
 			}
 
-			internal ConstructorInfo GetSerializationConstructor()
+			internal MethodBuilder GetSerializationConstructor()
 			{
 				if (baseSerializationCtor == null)
 				{
@@ -157,7 +157,7 @@ namespace IKVM.Internal
 			private readonly TypeWrapperFactory context;
 			private readonly TypeBuilder typeBuilder;
 			private readonly MethodWrapper ctor;
-			private ConstructorBuilder constructorBuilder;
+			private MethodBuilder constructorBuilder;
 
 			internal ConstructorForwarder(TypeWrapperFactory context, TypeBuilder typeBuilder, MethodWrapper ctor)
 				: base(ctor.DeclaringType, ctor.Name, ctor.Signature, null, null, null, ctor.Modifiers, MemberFlags.None)
@@ -229,7 +229,7 @@ namespace IKVM.Internal
 			}
 		}
 
-		internal void AddXmlMapParameterAttributes(MethodBase method, string className, string methodName, string methodSig, ref ParameterBuilder[] pbs)
+		internal void AddXmlMapParameterAttributes(MethodBuilder method, string className, string methodName, string methodSig, ref ParameterBuilder[] pbs)
 		{
 			IKVM.Internal.MapXml.Param[] parameters = classLoader.GetXmlMapParameters(className, methodName, methodSig);
 			if(parameters != null)
@@ -666,7 +666,7 @@ namespace IKVM.Internal
 								Type returnType;
 								Type[] parameterTypes;
 								MapSignature(constructor.Sig, out returnType, out parameterTypes);
-								ConstructorBuilder cb = typeBuilder.DefineConstructor(attribs, CallingConventions.Standard, parameterTypes);
+								MethodBuilder cb = ReflectUtil.DefineConstructor(typeBuilder, attribs, parameterTypes);
 								if(setmodifiers)
 								{
 									AttributeHelper.SetModifiers(cb, (Modifiers)constructor.Modifiers, false);
@@ -692,7 +692,7 @@ namespace IKVM.Internal
 								{
 									if(mw.Name == "<init>" && mw.Signature == constructor.Sig)
 									{
-										ConstructorBuilder mb = mw.GetMethod() as ConstructorBuilder;
+										MethodBuilder mb = mw.GetMethod() as MethodBuilder;
 										if(mb != null)
 										{
 											foreach(IKVM.Internal.MapXml.Attribute attr in constructor.Attributes)
@@ -1283,7 +1283,7 @@ namespace IKVM.Internal
 			return mw;
 		}
 
-		internal override ConstructorInfo GetBaseSerializationConstructor()
+		internal override MethodBase GetBaseSerializationConstructor()
 		{
 			if (workaroundBaseClass != null)
 			{

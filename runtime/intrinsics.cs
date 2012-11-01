@@ -120,6 +120,11 @@ namespace IKVM.Internal
 			return ClassFile.GetConstantPoolConstantString(Code[OpcodeIndex + offset].Arg1);
 		}
 
+		internal ClassFile.ConstantType GetConstantType(int offset)
+		{
+			return ClassFile.GetConstantPoolConstantType(Code[OpcodeIndex + offset].Arg1);
+		}
+
 		internal void PatchOpCode(int offset, NormalizedByteCode opc)
 		{
 			Code[OpcodeIndex + offset].PatchOpCode(opc);
@@ -178,7 +183,6 @@ namespace IKVM.Internal
 			Dictionary<IntrinsicKey, Emitter> intrinsics = new Dictionary<IntrinsicKey, Emitter>();
 			intrinsics.Add(new IntrinsicKey("java.lang.Object", "getClass", "()Ljava.lang.Class;"), Object_getClass);
 			intrinsics.Add(new IntrinsicKey("java.lang.Class", "desiredAssertionStatus", "()Z"), Class_desiredAssertionStatus);
-			intrinsics.Add(new IntrinsicKey("java.lang.Class", "getDeclaredField", "(Ljava.lang.String;)Ljava.lang.reflect.Field;"), Class_getDeclaredField);
 			intrinsics.Add(new IntrinsicKey("java.lang.Float", "floatToRawIntBits", "(F)I"), Float_floatToRawIntBits);
 			intrinsics.Add(new IntrinsicKey("java.lang.Float", "intBitsToFloat", "(I)F"), Float_intBitsToFloat);
 			intrinsics.Add(new IntrinsicKey("java.lang.Double", "doubleToRawLongBits", "(D)J"), Double_doubleToRawLongBits);
@@ -196,6 +200,7 @@ namespace IKVM.Internal
 #if STATIC_COMPILER
 			// this only applies to the core class library, so makes no sense in dynamic mode
 			intrinsics.Add(new IntrinsicKey("java.lang.Class", "getPrimitiveClass", "(Ljava.lang.String;)Ljava.lang.Class;"), Class_getPrimitiveClass);
+			intrinsics.Add(new IntrinsicKey("java.lang.Class", "getDeclaredField", "(Ljava.lang.String;)Ljava.lang.reflect.Field;"), Class_getDeclaredField);
 #endif
 			intrinsics.Add(new IntrinsicKey("java.lang.ThreadLocal", "<init>", "()V"), ThreadLocal_new);
 			intrinsics.Add(new IntrinsicKey("sun.misc.Unsafe", "ensureClassInitialized", "(Ljava.lang.Class;)V"), Unsafe_ensureClassInitialized);
@@ -245,6 +250,22 @@ namespace IKVM.Internal
 					return true;
 				}
 			}
+			// this optimizes obj.getClass() == Xxx.class
+			else if (eic.MatchRange(0, 3)
+				&& eic.Match(1, NormalizedByteCode.__ldc) && eic.GetConstantType(1) == ClassFile.ConstantType.Class
+				&& (eic.Match(2, NormalizedByteCode.__if_acmpeq) || eic.Match(2, NormalizedByteCode.__if_acmpne)))
+			{
+				TypeWrapper tw = eic.GetClassLiteral(1);
+				if (tw.IsGhost || tw.IsGhostArray || tw.IsUnloadable || (tw.IsRemapped && tw.IsFinal && tw is DotNetTypeWrapper))
+				{
+					return false;
+				}
+				eic.Emitter.Emit(OpCodes.Callvirt, Compiler.getTypeMethod);
+				eic.Emitter.Emit(OpCodes.Ldtoken, (tw.IsRemapped && tw.IsFinal) ? tw.TypeAsTBD : tw.TypeAsBaseType);
+				eic.Emitter.Emit(OpCodes.Call, Compiler.getTypeFromHandleMethod);
+				eic.PatchOpCode(1, NormalizedByteCode.__nop);
+				return true;
+			}
 			return false;
 		}
 
@@ -264,46 +285,75 @@ namespace IKVM.Internal
 			return false;
 		}
 
-		// this intrinsifies the unsafe.objectFieldOffset(XXX.class.getDeclaredField("xxx")) pattern
+#if STATIC_COMPILER
+		// this intrinsifies the following two patterns:
+		//   unsafe.objectFieldOffset(XXX.class.getDeclaredField("xxx"));
+		// and
+		//   Class k = XXX.class;
+		//   unsafe.objectFieldOffset(k.getDeclaredField("xxx"));
 		// to avoid initializing the full reflection machinery at this point
 		private static bool Class_getDeclaredField(EmitIntrinsicContext eic)
 		{
-			// validate that we're inside the XXX class and that xxx is an instance field of that class
+			if (eic.Caller.DeclaringType.GetClassLoader() != CoreClasses.java.lang.Object.Wrapper.GetClassLoader())
+			{
+				// we can only do this optimization when compiling the trusted core classes
+				return false;
+			}
+			TypeWrapper fieldClass;
 			if (eic.MatchRange(-2, 4)
-				&& eic.Match(-2, NormalizedByteCode.__ldc) && eic.GetClassLiteral(-2) == eic.Caller.DeclaringType
+				&& eic.Match(-2, NormalizedByteCode.__ldc)
 				&& eic.Match(-1, NormalizedByteCode.__ldc_nothrow)
 				&& eic.Match(1, NormalizedByteCode.__invokevirtual))
 			{
-				FieldWrapper field = null;
-				string fieldName = eic.GetStringLiteral(-1);
-				foreach (FieldWrapper fw in eic.Caller.DeclaringType.GetFields())
+				// unsafe.objectFieldOffset(XXX.class.getDeclaredField("xxx"));
+				fieldClass = eic.GetClassLiteral(-2);
+			}
+			else if (eic.MatchRange(-5, 7)
+				&& eic.Match(-5, NormalizedByteCode.__ldc)
+				&& eic.Match(-4, NormalizedByteCode.__astore)
+				&& eic.Match(-3, NormalizedByteCode.__getstatic)
+				&& eic.Match(-2, NormalizedByteCode.__aload, eic.Code[eic.OpcodeIndex - 4].NormalizedArg1)
+				&& eic.Match(-1, NormalizedByteCode.__ldc_nothrow)
+				&& eic.Match(1, NormalizedByteCode.__invokevirtual))
+			{
+				// Class k = XXX.class;
+				// unsafe.objectFieldOffset(k.getDeclaredField("xxx"));
+				fieldClass = eic.GetClassLiteral(-5);
+			}
+			else
+			{
+				return false;
+			}
+			FieldWrapper field = null;
+			string fieldName = eic.GetStringLiteral(-1);
+			foreach (FieldWrapper fw in fieldClass.GetFields())
+			{
+				if (fw.Name == fieldName)
 				{
-					if (fw.Name == fieldName)
+					if (field != null)
 					{
-						if (field != null)
-						{
-							return false;
-						}
-						field = fw;
+						return false;
 					}
+					field = fw;
 				}
-				if (field == null || field.IsStatic)
-				{
-					return false;
-				}
-				ClassFile.ConstantPoolItemMI cpi = eic.GetMethodref(1);
-				if (cpi.Class == "sun.misc.Unsafe" && cpi.Name == "objectFieldOffset" && cpi.Signature == "(Ljava.lang.reflect.Field;)J")
-				{
-					MethodWrapper mw = ClassLoaderWrapper.LoadClassCritical("sun.misc.Unsafe")
-						.GetMethodWrapper("objectFieldOffset", "(Ljava.lang.Class;Ljava.lang.String;)J", false);
-					mw.Link();
-					mw.EmitCallvirt(eic.Emitter);
-					eic.PatchOpCode(1, NormalizedByteCode.__nop);
-					return true;
-				}
+			}
+			if (field == null || field.IsStatic)
+			{
+				return false;
+			}
+			ClassFile.ConstantPoolItemMI cpi = eic.GetMethodref(1);
+			if (cpi.Class == "sun.misc.Unsafe" && cpi.Name == "objectFieldOffset" && cpi.Signature == "(Ljava.lang.reflect.Field;)J")
+			{
+				MethodWrapper mw = ClassLoaderWrapper.LoadClassCritical("sun.misc.Unsafe")
+					.GetMethodWrapper("objectFieldOffset", "(Ljava.lang.Class;Ljava.lang.String;)J", false);
+				mw.Link();
+				mw.EmitCallvirt(eic.Emitter);
+				eic.PatchOpCode(1, NormalizedByteCode.__nop);
+				return true;
 			}
 			return false;
 		}
+#endif
 
 		private static bool IsSafeForGetClassOptimization(TypeWrapper tw)
 		{

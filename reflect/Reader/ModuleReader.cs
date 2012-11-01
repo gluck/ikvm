@@ -144,7 +144,9 @@ namespace IKVM.Reflection.Reader
 						ReadTables(br);
 						break;
 					default:
-						throw new BadImageFormatException("Unsupported stream: " + sh.Name);
+						// we ignore unknown streams, because the CLR does so too
+						// (and some obfuscators add bogus streams)
+						break;
 				}
 			}
 		}
@@ -195,10 +197,6 @@ namespace IKVM.Reflection.Reader
 				{
 					tables[i].Sorted = (Sorted & (1UL << i)) != 0;
 					tables[i].RowCount = br.ReadInt32();
-				}
-				else if (tables[i] != null)
-				{
-					tables[i].RowCount = 0;
 				}
 			}
 			MetadataReader mr = new MetadataReader(this, br.BaseStream, HeapSizes);
@@ -299,7 +297,7 @@ namespace IKVM.Reflection.Reader
 			return str;
 		}
 
-		private static int ReadCompressedInt(byte[] buffer, ref int offset)
+		private static int ReadCompressedUInt(byte[] buffer, ref int offset)
 		{
 			byte b1 = buffer[offset++];
 			if (b1 <= 0x7F)
@@ -322,7 +320,7 @@ namespace IKVM.Reflection.Reader
 
 		internal byte[] GetBlobCopy(int blobIndex)
 		{
-			int len = ReadCompressedInt(blobHeap, ref blobIndex);
+			int len = ReadCompressedUInt(blobHeap, ref blobIndex);
 			byte[] buf = new byte[len];
 			Buffer.BlockCopy(blobHeap, blobIndex, buf, 0, len);
 			return buf;
@@ -343,7 +341,7 @@ namespace IKVM.Reflection.Reader
 					throw TokenOutOfRangeException(metadataToken);
 				}
 				int index = metadataToken & 0xFFFFFF;
-				int len = ReadCompressedInt(userStringHeap, ref index) & ~1;
+				int len = ReadCompressedUInt(userStringHeap, ref index) & ~1;
 				StringBuilder sb = new StringBuilder(len / 2);
 				for (int i = 0; i < len; i += 2)
 				{
@@ -618,6 +616,10 @@ namespace IKVM.Reflection.Reader
 				case MethodDefTable.Index:
 				case MethodSpecTable.Index:
 					return ResolveMethod(metadataToken, genericTypeArguments, genericMethodArguments);
+				case TypeRefTable.Index:
+				case TypeDefTable.Index:
+				case TypeSpecTable.Index:
+					return ResolveType(metadataToken, genericTypeArguments, genericMethodArguments);
 				default:
 					throw TokenOutOfRangeException(metadataToken);
 			}
@@ -1262,6 +1264,11 @@ namespace IKVM.Reflection.Reader
 		public override int __EntryPointToken
 		{
 			get { return (cliHeader.Flags & CliHeader.COMIMAGE_FLAGS_NATIVE_ENTRYPOINT) == 0 ? (int)cliHeader.EntryPointToken : 0; }
+		}
+
+		public override System.Security.Cryptography.X509Certificates.X509Certificate GetSignerCertificate()
+		{
+			return Authenticode.GetSignerCertificate(stream);
 		}
 	}
 }

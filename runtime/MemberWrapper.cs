@@ -1,5 +1,5 @@
 /*
-  Copyright (C) 2002-2011 Jeroen Frijters
+  Copyright (C) 2002-2012 Jeroen Frijters
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -55,7 +55,7 @@ namespace IKVM.Internal
 		Type2FinalField = 2048,
 	}
 
-	class MemberWrapper
+	abstract class MemberWrapper
 	{
 		private HandleWrapper handle;
 		private TypeWrapper declaringType;
@@ -404,66 +404,6 @@ namespace IKVM.Internal
 			get
 			{
 				return false;
-			}
-		}
-
-		internal class GhostMethodWrapper : SmartMethodWrapper
-		{
-			private MethodInfo ghostMethod;
-
-			internal GhostMethodWrapper(TypeWrapper declaringType, string name, string sig, MethodBase method, TypeWrapper returnType, TypeWrapper[] parameterTypes, Modifiers modifiers, MemberFlags flags)
-				: base(declaringType, name, sig, method, returnType, parameterTypes, modifiers, flags)
-			{
-				// make sure we weren't handed the ghostMethod in the wrapper value type
-				Debug.Assert(method == null || method.DeclaringType.IsInterface);
-			}
-
-			private void ResolveGhostMethod()
-			{
-				if(ghostMethod == null)
-				{
-					ghostMethod = DeclaringType.TypeAsSignatureType.GetMethod(this.Name, this.GetParametersForDefineMethod());
-					if(ghostMethod == null)
-					{
-						throw new InvalidOperationException("Unable to resolve ghost method");
-					}
-				}
-			}
-
-#if !STUB_GENERATOR
-			protected override void CallvirtImpl(CodeEmitter ilgen)
-			{
-				ResolveGhostMethod();
-				ilgen.Emit(OpCodes.Call, ghostMethod);
-			}
-#endif
-		}
-
-		internal static MethodWrapper Create(TypeWrapper declaringType, string name, string sig, MethodBase method, TypeWrapper returnType, TypeWrapper[] parameterTypes, Modifiers modifiers, MemberFlags flags)
-		{
-			Debug.Assert(declaringType != null && name!= null && sig != null && method != null);
-
-			if(declaringType.IsGhost)
-			{
-				// HACK since our caller isn't aware of the ghost issues, we'll handle the method swapping
-				if(method.DeclaringType.IsValueType)
-				{
-					Type[] types = new Type[parameterTypes.Length];
-					for(int i = 0; i < types.Length; i++)
-					{
-						types[i] = parameterTypes[i].TypeAsSignatureType;
-					}
-					method = declaringType.TypeAsBaseType.GetMethod(method.Name, types);
-				}
-				return new GhostMethodWrapper(declaringType, name, sig, method, returnType, parameterTypes, modifiers, flags);
-			}
-			else if(method is ConstructorInfo)
-			{
-				return new SmartConstructorMethodWrapper(declaringType, name, sig, (ConstructorInfo)method, parameterTypes, modifiers, flags);
-			}
-			else
-			{
-				return new SmartCallMethodWrapper(declaringType, name, sig, (MethodInfo)method, returnType, parameterTypes, modifiers, flags, SimpleOpCode.Call, method.IsStatic ? SimpleOpCode.Call : SimpleOpCode.Callvirt);
 			}
 		}
 
@@ -859,7 +799,7 @@ namespace IKVM.Internal
 					}
 					return acc.newInstance(args);
 				}
-				else if (method is MethodInfo)
+				else if (!ReflectUtil.IsConstructor(method))
 				{
 					Debug.Assert(method.IsStatic);
 					// we're dealing with a constructor on a remapped type, if obj is supplied, it means
@@ -973,10 +913,6 @@ namespace IKVM.Internal
 			{
 				method = method.Module.ResolveMethod(((MethodBuilder)method).GetToken().Token);
 			}
-			if(method is ConstructorBuilder)
-			{
-				method = method.Module.ResolveMethod(((ConstructorBuilder)method).GetToken().Token);
-			}
 		}
 
 		[HideFromJava]
@@ -1089,7 +1025,7 @@ namespace IKVM.Internal
 		}
 	}
 
-	class SmartMethodWrapper : MethodWrapper
+	abstract class SmartMethodWrapper : MethodWrapper
 	{
 		internal SmartMethodWrapper(TypeWrapper declaringType, string name, string sig, MethodBase method, TypeWrapper returnType, TypeWrapper[] parameterTypes, Modifiers modifiers, MemberFlags flags)
 			: base(declaringType, name, sig, method, returnType, parameterTypes, modifiers, flags)
@@ -1097,14 +1033,9 @@ namespace IKVM.Internal
 		}
 
 #if !STUB_GENERATOR
-		protected virtual void PreEmit(CodeEmitter ilgen)
-		{
-		}
-
 		internal sealed override void EmitCall(CodeEmitter ilgen)
 		{
 			AssertLinked();
-			PreEmit(ilgen);
 			CallImpl(ilgen);
 		}
 
@@ -1116,7 +1047,6 @@ namespace IKVM.Internal
 		internal sealed override void EmitCallvirt(CodeEmitter ilgen)
 		{
 			AssertLinked();
-			PreEmit(ilgen);
 			if(DeclaringType.IsNonPrimitiveValueType)
 			{
 				// callvirt isn't allowed on a value type
@@ -1137,7 +1067,6 @@ namespace IKVM.Internal
 		internal sealed override void EmitNewobj(CodeEmitter ilgen)
 		{
 			AssertLinked();
-			PreEmit(ilgen);
 			NewobjImpl(ilgen);
 			if(DeclaringType.IsNonPrimitiveValueType)
 			{
@@ -1174,59 +1103,72 @@ namespace IKVM.Internal
 #if !STUB_GENERATOR
 		internal override void EmitCall(CodeEmitter ilgen)
 		{
-			ilgen.Emit(SimpleOpCodeToOpCode(call), (MethodInfo)GetMethod());
+			ilgen.Emit(SimpleOpCodeToOpCode(call), GetMethod());
 		}
 
 		internal override void EmitCallvirt(CodeEmitter ilgen)
 		{
-			ilgen.Emit(SimpleOpCodeToOpCode(callvirt), (MethodInfo)GetMethod());
+			ilgen.Emit(SimpleOpCodeToOpCode(callvirt), GetMethod());
 		}
 #endif // !STUB_GENERATOR
 	}
 
-	sealed class SmartCallMethodWrapper : SmartMethodWrapper
+	sealed class TypicalMethodWrapper : SmartMethodWrapper
 	{
-		private SimpleOpCode call;
-		private SimpleOpCode callvirt;
-
-		internal SmartCallMethodWrapper(TypeWrapper declaringType, string name, string sig, MethodInfo method, TypeWrapper returnType, TypeWrapper[] parameterTypes, Modifiers modifiers, MemberFlags flags, SimpleOpCode call, SimpleOpCode callvirt)
+		internal TypicalMethodWrapper(TypeWrapper declaringType, string name, string sig, MethodBase method, TypeWrapper returnType, TypeWrapper[] parameterTypes, Modifiers modifiers, MemberFlags flags)
 			: base(declaringType, name, sig, method, returnType, parameterTypes, modifiers, flags)
 		{
-			this.call = call;
-			this.callvirt = callvirt;
 		}
 
 #if !STUB_GENERATOR
 		protected override void CallImpl(CodeEmitter ilgen)
 		{
-			ilgen.Emit(SimpleOpCodeToOpCode(call), (MethodInfo)GetMethod());
+			ilgen.Emit(OpCodes.Call, GetMethod());
 		}
 
 		protected override void CallvirtImpl(CodeEmitter ilgen)
 		{
-			ilgen.Emit(SimpleOpCodeToOpCode(callvirt), (MethodInfo)GetMethod());
-		}
-#endif // !STUB_GENERATOR
-	}
-
-	sealed class SmartConstructorMethodWrapper : SmartMethodWrapper
-	{
-		internal SmartConstructorMethodWrapper(TypeWrapper declaringType, string name, string sig, ConstructorInfo method, TypeWrapper[] parameterTypes, Modifiers modifiers, MemberFlags flags)
-			: base(declaringType, name, sig, method, PrimitiveTypeWrapper.VOID, parameterTypes, modifiers, flags)
-		{
-		}
-
-#if !STUB_GENERATOR
-		protected override void CallImpl(CodeEmitter ilgen)
-		{
-			ilgen.Emit(OpCodes.Call, (ConstructorInfo)GetMethod());
+			ilgen.Emit(OpCodes.Callvirt, GetMethod());
 		}
 
 		protected override void NewobjImpl(CodeEmitter ilgen)
 		{
-			ilgen.Emit(OpCodes.Newobj, (ConstructorInfo)GetMethod());
+			ilgen.Emit(OpCodes.Newobj, GetMethod());
 		}
 #endif // !STUB_GENERATOR
+	}
+
+	sealed class GhostMethodWrapper : SmartMethodWrapper
+	{
+		private MethodInfo ghostMethod;
+
+		internal GhostMethodWrapper(TypeWrapper declaringType, string name, string sig, MethodBase method, MethodInfo ghostMethod, TypeWrapper returnType, TypeWrapper[] parameterTypes, Modifiers modifiers, MemberFlags flags)
+			: base(declaringType, name, sig, method, returnType, parameterTypes, modifiers, flags)
+		{
+			// make sure we weren't handed the ghostMethod in the wrapper value type
+			Debug.Assert(method == null || method.DeclaringType.IsInterface);
+			this.ghostMethod = ghostMethod;
+		}
+
+		private void ResolveGhostMethod()
+		{
+			if (ghostMethod == null)
+			{
+				ghostMethod = DeclaringType.TypeAsSignatureType.GetMethod(this.Name, this.GetParametersForDefineMethod());
+				if (ghostMethod == null)
+				{
+					throw new InvalidOperationException("Unable to resolve ghost method");
+				}
+			}
+		}
+
+#if !STUB_GENERATOR
+		protected override void CallvirtImpl(CodeEmitter ilgen)
+		{
+			ResolveGhostMethod();
+			ilgen.Emit(OpCodes.Call, ghostMethod);
+		}
+#endif
 	}
 
 	sealed class AccessStubMethodWrapper : SmartMethodWrapper
@@ -1391,19 +1333,26 @@ namespace IKVM.Internal
 
 		internal object ToField(bool copy)
 		{
+			return ToField(copy, null);
+		}
+
+		internal object ToField(bool copy, int? fieldIndex)
+		{
 #if FIRST_PASS
 			return null;
 #else
 			java.lang.reflect.Field field = reflectionField;
 			if (field == null)
 			{
+				const Modifiers ReflectionFieldModifiersMask = Modifiers.Public | Modifiers.Private | Modifiers.Protected | Modifiers.Static
+					| Modifiers.Final | Modifiers.Volatile | Modifiers.Transient | Modifiers.Synthetic | Modifiers.Enum;
 				Link();
 				field = new java.lang.reflect.Field(
 					this.DeclaringType.ClassObject,
 					this.Name,
 					this.FieldTypeWrapper.EnsureLoadable(this.DeclaringType.GetClassLoader()).ClassObject,
-					(int)this.Modifiers | (this.IsInternal ? 0x40000000 : 0),
-					Array.IndexOf(this.DeclaringType.GetFields(), this),
+					(int)(this.Modifiers & ReflectionFieldModifiersMask) | (this.IsInternal ? 0x40000000 : 0),
+					fieldIndex ?? Array.IndexOf(this.DeclaringType.GetFields(), this),
 					this.DeclaringType.GetGenericFieldSignature(this),
 					null
 				);
@@ -1461,6 +1410,14 @@ namespace IKVM.Internal
 		protected abstract void EmitSetImpl(CodeEmitter ilgen);
 #endif // !STUB_GENERATOR
 
+
+#if STATIC_COMPILER
+		internal bool IsLinked
+		{
+			get { return fieldType != null; }
+		}
+#endif
+		
 		internal void Link()
 		{
 			lock(this)

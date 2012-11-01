@@ -128,7 +128,7 @@ namespace IKVM.Runtime
 		private static OptionNode classes;
 		private static OptionNode packages;
 
-		private class OptionNode
+		private sealed class OptionNode
 		{
 			internal readonly string name;
 			internal readonly bool enabled;
@@ -291,9 +291,9 @@ static class DynamicMethodUtils
 			}
 			return new DynamicMethod(name, MethodAttributes.Public | MethodAttributes.Static, CallingConventions.Standard, returnType, paramTypes, dynamicModule, true);
 #else
-			if (owner.IsInterface)
+			if (!ReflectUtil.CanOwnDynamicMethod(owner))
 			{
-				// FXBUG interfaces aren't allowed as owners of dynamic methods
+				// interfaces and arrays aren't allowed as owners of dynamic methods
 				return new DynamicMethod(name, MethodAttributes.Public | MethodAttributes.Static, CallingConventions.Standard, returnType, paramTypes, owner.Module, true);
 			}
 			else
@@ -2782,7 +2782,7 @@ namespace IKVM.NativeCode.java
 						}
 						else
 						{
-							list.Add((jlrField)fields[i].ToField(false));
+							list.Add((jlrField)fields[i].ToField(false, i));
 						}
 					}
 					return list.ToArray();
@@ -4072,7 +4072,7 @@ namespace IKVM.NativeCode.java
 			}
 
 #if !FIRST_PASS
-			private class NetworkInterfaceInfo
+			private sealed class NetworkInterfaceInfo
 			{
 				internal System.Net.NetworkInformation.NetworkInterface[] dotnetInterfaces;
 				internal jnNetworkInterface[] javaInterfaces;
@@ -5660,7 +5660,7 @@ namespace IKVM.NativeCode.sun.misc
         }
 
         [System.Security.SecurityCritical]
-        private class CriticalCtrlHandler : System.Runtime.ConstrainedExecution.CriticalFinalizerObject
+        private sealed class CriticalCtrlHandler : System.Runtime.ConstrainedExecution.CriticalFinalizerObject
         {
             private ConsoleCtrlDelegate consoleCtrlDelegate;
             private bool ok;

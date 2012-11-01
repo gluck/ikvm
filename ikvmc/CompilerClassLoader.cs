@@ -42,7 +42,7 @@ using System.Runtime.CompilerServices;
 
 namespace IKVM.Internal
 {
-	class CompilerClassLoader : ClassLoaderWrapper
+	sealed class CompilerClassLoader : ClassLoaderWrapper
 	{
 		private Dictionary<string, ClassItem> classes;
 		private Dictionary<string, RemapperTypeWrapper> remapped = new Dictionary<string, RemapperTypeWrapper>();
@@ -828,7 +828,7 @@ namespace IKVM.Internal
 			}
 		}
 
-		private class RemapperTypeWrapper : TypeWrapper
+		private sealed class RemapperTypeWrapper : TypeWrapper
 		{
 			private CompilerClassLoader classLoader;
 			private TypeBuilder typeBuilder;
@@ -1026,7 +1026,7 @@ namespace IKVM.Internal
 
 				internal override void EmitCall(CodeEmitter ilgen)
 				{
-					ilgen.Emit(OpCodes.Call, (ConstructorInfo)GetMethod());
+					ilgen.Emit(OpCodes.Call, GetMethod());
 				}
 
 				internal override void EmitNewobj(CodeEmitter ilgen)
@@ -1037,7 +1037,7 @@ namespace IKVM.Internal
 					}
 					else
 					{
-						ilgen.Emit(OpCodes.Newobj, (ConstructorInfo)GetMethod());
+						ilgen.Emit(OpCodes.Newobj, GetMethod());
 					}
 				}
 
@@ -1047,7 +1047,7 @@ namespace IKVM.Internal
 					RemapperTypeWrapper typeWrapper = (RemapperTypeWrapper)DeclaringType;
 					Type[] paramTypes = typeWrapper.GetClassLoader().ArgTypeListFromSig(m.Sig);
 
-					ConstructorBuilder cbCore = null;
+					MethodBuilder cbCore = null;
 
 					if(typeWrapper.shadowType.IsSealed)
 					{
@@ -1066,7 +1066,7 @@ namespace IKVM.Internal
 					}
 					else
 					{
-						cbCore = typeWrapper.typeBuilder.DefineConstructor(attr, CallingConventions.Standard, paramTypes);
+						cbCore = ReflectUtil.DefineConstructor(typeWrapper.typeBuilder, attr, paramTypes);
 						if(m.Attributes != null)
 						{
 							foreach(IKVM.Internal.MapXml.Attribute custattr in m.Attributes)
@@ -1086,7 +1086,7 @@ namespace IKVM.Internal
 
 					Type[] paramTypes = this.GetParametersForDefineMethod();
 
-					ConstructorBuilder cbCore = GetMethod() as ConstructorBuilder;
+					MethodBuilder cbCore = GetMethod() as MethodBuilder;
 
 					if(cbCore != null)
 					{
@@ -1283,13 +1283,7 @@ namespace IKVM.Internal
 							argTypes[0] = typeWrapper.shadowType;
 							if(typeWrapper.helperTypeBuilder == null)
 							{
-								// FXBUG we use a nested helper class, because Reflection.Emit won't allow us to add a static method to the interface
-								// TODO now that we're on Whidbey we can remove this workaround
-								typeWrapper.helperTypeBuilder = typeWrapper.typeBuilder.DefineNestedType("__Helper", TypeAttributes.NestedPublic | TypeAttributes.Class | TypeAttributes.Sealed);
-								ilgen = CodeEmitter.Create(typeWrapper.helperTypeBuilder.DefineConstructor(MethodAttributes.Private, CallingConventions.Standard, Type.EmptyTypes));
-								ilgen.Emit(OpCodes.Ldnull);
-								ilgen.Emit(OpCodes.Throw);
-								ilgen.DoEmit();
+								typeWrapper.helperTypeBuilder = typeWrapper.typeBuilder.DefineNestedType("__Helper", TypeAttributes.NestedPublic | TypeAttributes.Class | TypeAttributes.Sealed | TypeAttributes.Abstract);
 								AttributeHelper.HideFromJava(typeWrapper.helperTypeBuilder);
 							}
 							helper = typeWrapper.helperTypeBuilder.DefineMethod(m.Name, MethodAttributes.HideBySig | MethodAttributes.Public | MethodAttributes.Static, typeWrapper.GetClassLoader().RetTypeWrapperFromSig(m.Sig).TypeAsSignatureType, argTypes);
@@ -1775,24 +1769,6 @@ namespace IKVM.Internal
 				}
 			}
 
-			private static void SetParameters(ClassLoaderWrapper loader, ConstructorBuilder cb, IKVM.Internal.MapXml.Param[] parameters)
-			{
-				if(parameters != null)
-				{
-					for(int i = 0; i < parameters.Length; i++)
-					{
-						ParameterBuilder pb = cb.DefineParameter(i + 1, ParameterAttributes.None, parameters[i].Name);
-						if(parameters[i].Attributes != null)
-						{
-							for(int j = 0; j < parameters[i].Attributes.Length; j++)
-							{
-								AttributeHelper.SetCustomAttribute(loader, pb, parameters[i].Attributes[j]);
-							}
-						}
-					}
-				}
-			}
-
 			internal void Process2ndPassStep1()
 			{
 				if (!shadowType.IsSealed)
@@ -1881,7 +1857,7 @@ namespace IKVM.Internal
 
 				if(classDef.Clinit != null)
 				{
-					ConstructorBuilder cb = typeBuilder.DefineTypeInitializer();
+					MethodBuilder cb = ReflectUtil.DefineTypeInitializer(typeBuilder);
 					CodeEmitter ilgen = CodeEmitter.Create(cb);
 					// TODO emit code to make sure super class is initialized
 					classDef.Clinit.body.Emit(classLoader, ilgen);
@@ -1960,11 +1936,11 @@ namespace IKVM.Internal
 						PropertyBuilder pb = typeBuilder.DefineProperty(pi.Name, PropertyAttributes.None, pi.PropertyType, paramTypes);
 						if(pi.GetGetMethod() != null)
 						{
-							pb.SetGetMethod((MethodBuilder)methods[MakeMethodKey(pi.GetGetMethod())]);
+							pb.SetGetMethod(methods[MakeMethodKey(pi.GetGetMethod())]);
 						}
 						if(pi.GetSetMethod() != null)
 						{
-							pb.SetSetMethod((MethodBuilder)methods[MakeMethodKey(pi.GetSetMethod())]);
+							pb.SetSetMethod(methods[MakeMethodKey(pi.GetSetMethod())]);
 						}
 						AttributeHelper.SetEditorBrowsableNever(pb);
 					}
@@ -2189,7 +2165,7 @@ namespace IKVM.Internal
 			}
 		}
 
-		internal static void AddDeclaredExceptions(MethodBase mb, IKVM.Internal.MapXml.Throws[] throws)
+		internal static void AddDeclaredExceptions(MethodBuilder mb, IKVM.Internal.MapXml.Throws[] throws)
 		{
 			if (throws != null)
 			{
@@ -3337,7 +3313,7 @@ namespace IKVM.Internal
 		internal string jar;
 	}
 
-	class CompilerOptions
+	sealed class CompilerOptions
 	{
 		internal string path;
 		internal string keyfile;

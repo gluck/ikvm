@@ -76,6 +76,11 @@ namespace IKVM.Reflection
 			return GetModules(true);
 		}
 
+		public IEnumerable<Module> Modules
+		{
+			get { return GetLoadedModules(); }
+		}
+
 		public Module[] GetLoadedModules()
 		{
 			return GetLoadedModules(true);
@@ -102,6 +107,25 @@ namespace IKVM.Reflection
 				}
 			}
 			return list.ToArray();
+		}
+
+		public IEnumerable<Type> ExportedTypes
+		{
+			get { return GetExportedTypes(); }
+		}
+
+		public IEnumerable<TypeInfo> DefinedTypes
+		{
+			get
+			{
+				Type[] types = GetTypes();
+				TypeInfo[] typeInfos = new TypeInfo[types.Length];
+				for (int i = 0; i < types.Length; i++)
+				{
+					typeInfos[i] = types[i].GetTypeInfo();
+				}
+				return typeInfos;
+			}
 		}
 
 		public Type GetType(string name)
@@ -163,6 +187,16 @@ namespace IKVM.Reflection
 			return CustomAttributeData.__GetCustomAttributes(this, attributeType, inherit);
 		}
 
+		public IList<CustomAttributeData> GetCustomAttributesData()
+		{
+			return CustomAttributeData.GetCustomAttributes(this);
+		}
+
+		public IEnumerable<CustomAttributeData> CustomAttributes
+		{
+			get { return GetCustomAttributesData(); }
+		}
+
 		public static string CreateQualifiedName(string assemblyName, string typeName)
 		{
 			return typeName + ", " + assemblyName;
@@ -186,14 +220,24 @@ namespace IKVM.Reflection
 			}
 		}
 
+		public virtual bool IsDynamic
+		{
+			get { return false; }
+		}
+
 		public virtual bool __IsMissing
 		{
 			get { return false; }
 		}
 
-		public virtual AssemblyNameFlags __AssemblyFlags
+		public AssemblyNameFlags __AssemblyFlags
 		{
-			get { return GetName().Flags; }
+			get { return GetAssemblyFlags(); }
+		}
+
+		protected virtual AssemblyNameFlags GetAssemblyFlags()
+		{
+			return GetName().Flags;
 		}
 
 		internal abstract IList<CustomAttributeData> GetCustomAttributesData(Type attributeType);

@@ -50,8 +50,10 @@ namespace IKVM.Reflection
 		[Flags]
 		protected enum TypeFlags
 		{
-			// for use by TypeBuilder
+			// for use by TypeBuilder or TypeDefImpl
 			IsGenericTypeDefinition = 1,
+
+			// for use by TypeBuilder
 			HasNestedTypes = 2,
 			Baked = 4,
 
@@ -59,9 +61,12 @@ namespace IKVM.Reflection
 			ValueType = 8,
 			NotValueType = 16,
 
-			// for use by TypeDef, TypeBuilder or MissingType
+			// for use by TypeDefImpl, TypeBuilder or MissingType
 			PotentialEnumOrValueType = 32,
 			EnumOrValueType = 64,
+
+			// for use by TypeDefImpl
+			NotGenericTypeDefinition = 128,
 		}
 
 		// prevent subclassing by outsiders
@@ -297,6 +302,11 @@ namespace IKVM.Reflection
 			return ReferenceEquals(type, this) ? base.GetHashCode() : type.GetHashCode();
 		}
 
+		public Type[] GenericTypeArguments
+		{
+			get { return IsConstructedGenericType ? GetGenericArguments() : Type.EmptyTypes; }
+		}
+
 		public virtual Type[] GetGenericArguments()
 		{
 			return Type.EmptyTypes;
@@ -430,6 +440,87 @@ namespace IKVM.Reflection
 				}
 			}
 			throw new InvalidOperationException();
+		}
+
+		public string[] GetEnumNames()
+		{
+			if (!IsEnum)
+			{
+				throw new ArgumentException();
+			}
+			List<string> names = new List<string>();
+			foreach (FieldInfo field in __GetDeclaredFields())
+			{
+				if (field.IsLiteral)
+				{
+					names.Add(field.Name);
+				}
+			}
+			return names.ToArray();
+		}
+
+		public string GetEnumName(object value)
+		{
+			if (!IsEnum)
+			{
+				throw new ArgumentException();
+			}
+			if (value == null)
+			{
+				throw new ArgumentNullException();
+			}
+			try
+			{
+				value = Convert.ChangeType(value, GetTypeCode(GetEnumUnderlyingType()));
+			}
+			catch (FormatException)
+			{
+				throw new ArgumentException();
+			}
+			catch (OverflowException)
+			{
+				return null;
+			}
+			catch (InvalidCastException)
+			{
+				return null;
+			}
+			foreach (FieldInfo field in __GetDeclaredFields())
+			{
+				if (field.IsLiteral && field.GetRawConstantValue().Equals(value))
+				{
+					return field.Name;
+				}
+			}
+			return null;
+		}
+
+		public bool IsEnumDefined(object value)
+		{
+			if (value is string)
+			{
+				return Array.IndexOf(GetEnumNames(), value) != -1;
+			}
+			if (!IsEnum)
+			{
+				throw new ArgumentException();
+			}
+			if (value == null)
+			{
+				throw new ArgumentNullException();
+			}
+			if (System.Type.GetTypeCode(value.GetType()) != GetTypeCode(GetEnumUnderlyingType()))
+			{
+				throw new ArgumentException();
+			}
+			foreach (FieldInfo field in __GetDeclaredFields())
+			{
+				if (field.IsLiteral && field.GetRawConstantValue().Equals(value))
+				{
+					return true;
+				}
+			}
+			return false;
 		}
 
 		public override string ToString()
@@ -801,7 +892,7 @@ namespace IKVM.Reflection
 								{
 									baseMethods = new List<MethodInfo>();
 								}
-								else if (FindMethod(baseMethods, mi.GetBaseDefinition()))
+								else if (baseMethods.Contains(mi.GetBaseDefinition()))
 								{
 									continue;
 								}
@@ -813,18 +904,6 @@ namespace IKVM.Reflection
 				}
 			}
 			return list.ToArray();
-		}
-
-		private static bool FindMethod(List<MethodInfo> methods, MethodInfo method)
-		{
-			foreach (MethodInfo m in methods)
-			{
-				if (m.Name == method.Name && m.MethodSignature.Equals(method.MethodSignature))
-				{
-					return true;
-				}
-			}
-			return false;
 		}
 
 		public MethodInfo[] GetMethods()
@@ -1958,9 +2037,20 @@ namespace IKVM.Reflection
 			// types don't have pseudo custom attributes
 			return null;
 		}
+
+		// in .NET this is an extension method, but we target .NET 2.0, so we have an instance method
+		public TypeInfo GetTypeInfo()
+		{
+			TypeInfo type = this as TypeInfo;
+			if (type == null)
+			{
+				throw new MissingMemberException(this);
+			}
+			return type;
+		}
 	}
 
-	abstract class ElementHolderType : Type
+	abstract class ElementHolderType : TypeInfo
 	{
 		protected readonly Type elementType;
 		private int token;
@@ -2500,7 +2590,7 @@ namespace IKVM.Reflection
 		}
 	}
 
-	sealed class GenericTypeInstance : Type
+	sealed class GenericTypeInstance : TypeInfo
 	{
 		private readonly Type type;
 		private readonly Type[] args;
@@ -2863,7 +2953,7 @@ namespace IKVM.Reflection
 		}
 	}
 
-	sealed class FunctionPointerType : Type
+	sealed class FunctionPointerType : TypeInfo
 	{
 		private readonly Universe universe;
 		private readonly __StandAloneMethodSig sig;
@@ -2945,10 +3035,6 @@ namespace IKVM.Reflection
 
 	sealed class MarkerType : Type
 	{
-		// used by ILGenerator
-		internal static readonly Type Fault = new MarkerType();
-		internal static readonly Type Finally = new MarkerType();
-		internal static readonly Type Filter = new MarkerType();
 		// used by CustomModifiers and SignatureHelper
 		internal static readonly Type ModOpt = new MarkerType();
 		internal static readonly Type ModReq = new MarkerType();
@@ -2984,6 +3070,11 @@ namespace IKVM.Reflection
 		}
 
 		internal override bool IsBaked
+		{
+			get { throw new InvalidOperationException(); }
+		}
+
+		public override bool __IsMissing
 		{
 			get { throw new InvalidOperationException(); }
 		}

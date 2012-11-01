@@ -492,13 +492,13 @@ namespace IKVM.Reflection.Emit
 			ByteBuffer namedArgs = new ByteBuffer(100);
 			ByteBuffer bb = new ByteBuffer(list.Count * 100);
 			bb.Write((byte)'.');
-			bb.WriteCompressedInt(list.Count);
+			bb.WriteCompressedUInt(list.Count);
 			foreach (CustomAttributeBuilder cab in list)
 			{
 				bb.Write(cab.Constructor.DeclaringType.AssemblyQualifiedName);
 				namedArgs.Clear();
 				cab.WriteNamedArgumentsForDeclSecurity(this, namedArgs);
-				bb.WriteCompressedInt(namedArgs.Length);
+				bb.WriteCompressedUInt(namedArgs.Length);
 				bb.Write(namedArgs);
 			}
 			return this.Blobs.Add(bb);
@@ -920,7 +920,7 @@ namespace IKVM.Reflection.Emit
 			resolvedTokens[index] = realToken;
 		}
 
-		internal bool IsPseudoToken(int token)
+		internal static bool IsPseudoToken(int token)
 		{
 			return token < 0;
 		}

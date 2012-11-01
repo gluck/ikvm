@@ -31,7 +31,7 @@ using IKVM.Reflection.Writer;
 
 namespace IKVM.Reflection.Emit
 {
-	public sealed class GenericTypeParameterBuilder : Type
+	public sealed class GenericTypeParameterBuilder : TypeInfo
 	{
 		private readonly string name;
 		private readonly TypeBuilder type;
@@ -246,7 +246,7 @@ namespace IKVM.Reflection.Emit
 		}
 	}
 
-	public sealed class TypeBuilder : Type, ITypeOwner
+	public sealed class TypeBuilder : TypeInfo, ITypeOwner
 	{
 		public const int UnspecifiedTypeSize = 0;
 		private readonly ITypeOwner owner;
@@ -397,6 +397,11 @@ namespace IKVM.Reflection.Emit
 			return DefineProperty(name, attributes, returnType, null, null, parameterTypes, null, null);
 		}
 
+		public PropertyBuilder DefineProperty(string name, PropertyAttributes attributes, CallingConventions callingConvention, Type returnType, Type[] parameterTypes)
+		{
+			return DefineProperty(name, attributes, callingConvention, returnType, null, null, parameterTypes, null, null);
+		}
+
 		public PropertyBuilder DefineProperty(string name, PropertyAttributes attributes, Type returnType, Type[] returnTypeRequiredCustomModifiers, Type[] returnTypeOptionalCustomModifiers,
 			Type[] parameterTypes, Type[][] parameterTypeRequiredCustomModifiers, Type[][] parameterTypeOptionalCustomModifiers)
 		{
@@ -481,7 +486,7 @@ namespace IKVM.Reflection.Emit
 			return DefineNestedType(name, attr, parent, packSize, 0);
 		}
 
-		private TypeBuilder DefineNestedType(string name, TypeAttributes attr, Type parent, PackingSize packSize, int typeSize)
+		public TypeBuilder DefineNestedType(string name, TypeAttributes attr, Type parent, PackingSize packSize, int typeSize)
 		{
 			string ns = null;
 			int lastdot = name.LastIndexOf('.');
@@ -689,7 +694,7 @@ namespace IKVM.Reflection.Emit
 			return this;
 		}
 
-		public Type CreateType()
+		public TypeInfo CreateTypeInfo()
 		{
 			if ((typeFlags & TypeFlags.Baked) != 0)
 			{
@@ -705,9 +710,15 @@ namespace IKVM.Reflection.Emit
 				rec.Parent = token;
 				this.ModuleBuilder.ClassLayout.AddRecord(rec);
 			}
+			bool hasConstructor = false;
 			foreach (MethodBuilder mb in methods)
 			{
+				hasConstructor |= mb.IsSpecialName && mb.Name == ConstructorInfo.ConstructorName;
 				mb.Bake();
+			}
+			if (!hasConstructor && !IsModulePseudoType && !IsInterface && !IsValueType && !(IsAbstract && IsSealed))
+			{
+				((MethodBuilder)DefineDefaultConstructor(MethodAttributes.Public).GetMethodInfo()).Bake();
 			}
 			if (declarativeSecurity != null)
 			{
@@ -732,6 +743,11 @@ namespace IKVM.Reflection.Emit
 				}
 			}
 			return new BakedType(this);
+		}
+
+		public Type CreateType()
+		{
+			return CreateTypeInfo();
 		}
 
 		internal void PopulatePropertyAndEventTables()
@@ -1095,7 +1111,7 @@ namespace IKVM.Reflection.Emit
 		}
 	}
 
-	sealed class BakedType : Type
+	sealed class BakedType : TypeInfo
 	{
 		internal BakedType(TypeBuilder typeBuilder)
 			: base(typeBuilder)
