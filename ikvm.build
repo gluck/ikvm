@@ -7,7 +7,6 @@
     <target name="signed">
          <property name="signed" value="SIGNCODE" />
          <property name="signoption" value="-key:ikvm-key" />
-         <property name="ilasm_signoption" value="/key:@ikvm-key" />
          <call target="managed" />
     </target>
     <target name="managed" depends="clean-managed CommonAssemblyInfo">
@@ -38,6 +37,8 @@
         <delete failonerror="false">
             <fileset>
                 <include name="bin/IKVM.AWT.WinForms.dll" />
+                <include name="bin/IKVM.MSBuild.dll" />
+                <include name="bin/IKVM.MSBuild.Java.Targets" />
                 <include name="bin/IKVM.Reflection.dll" />
                 <include name="bin/IKVM.Runtime.dll" />
                 <include name="bin/IKVM.Runtime.JNI.dll" />

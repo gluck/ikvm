@@ -455,7 +455,7 @@ namespace IKVM.Reflection
 			}
 		}
 
-		internal Type GetType(Universe universe, Assembly context, bool throwOnError, string originalName, bool resolve, bool ignoreCase)
+		internal Type GetType(Universe universe, Module context, bool throwOnError, string originalName, bool resolve, bool ignoreCase)
 		{
 			Debug.Assert(!resolve || !ignoreCase);
 			TypeName name = TypeName.Split(this.name);
@@ -469,7 +469,7 @@ namespace IKVM.Reflection
 				}
 				if (resolve)
 				{
-					type = asm.ResolveType(name);
+					type = asm.ResolveType(context, name);
 				}
 				else if (ignoreCase)
 				{
@@ -484,7 +484,7 @@ namespace IKVM.Reflection
 			{
 				if (resolve)
 				{
-					type = universe.Mscorlib.ResolveType(name);
+					type = universe.Mscorlib.ResolveType(context, name);
 				}
 				else if (ignoreCase)
 				{
@@ -506,7 +506,7 @@ namespace IKVM.Reflection
 				{
 					type = context.FindType(name);
 				}
-				if (type == null && context != universe.Mscorlib)
+				if (type == null && context != universe.Mscorlib.ManifestModule)
 				{
 					if (ignoreCase)
 					{
@@ -521,18 +521,18 @@ namespace IKVM.Reflection
 				{
 					if (universe.Mscorlib.__IsMissing && !context.__IsMissing)
 					{
-						type = universe.Mscorlib.ResolveType(name);
+						type = universe.Mscorlib.ResolveType(context, name);
 					}
 					else
 					{
-						type = context.ResolveType(name);
+						type = context.Assembly.ResolveType(context, name);
 					}
 				}
 			}
 			return Expand(type, context, throwOnError, originalName, resolve, ignoreCase);
 		}
 
-		internal Type Expand(Type type, Assembly context, bool throwOnError, string originalName, bool resolve, bool ignoreCase)
+		internal Type Expand(Type type, Module context, bool throwOnError, string originalName, bool resolve, bool ignoreCase)
 		{
 			Debug.Assert(!resolve || !ignoreCase);
 			if (type == null)
@@ -557,7 +557,7 @@ namespace IKVM.Reflection
 					{
 						if (resolve)
 						{
-							type = outer.Module.universe.GetMissingTypeOrThrow(outer.Module, outer, name);
+							type = outer.Module.universe.GetMissingTypeOrThrow(context, outer.Module, outer, name);
 						}
 						else if (throwOnError)
 						{

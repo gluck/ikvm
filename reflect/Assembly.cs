@@ -80,9 +80,9 @@ namespace IKVM.Reflection
 		// The differences between ResolveType and FindType are:
 		// - ResolveType is only used when a type is assumed to exist (because another module's metadata claims it)
 		// - ResolveType can return a MissingType
-		internal Type ResolveType(TypeName typeName)
+		internal Type ResolveType(Module requester, TypeName typeName)
 		{
-			return FindType(typeName) ?? universe.GetMissingTypeOrThrow(this.ManifestModule, null, typeName);
+			return FindType(typeName) ?? universe.GetMissingTypeOrThrow(requester, this.ManifestModule, null, typeName);
 		}
 
 		public string FullName
@@ -183,7 +183,7 @@ namespace IKVM.Reflection
 			{
 				throw new MissingAssemblyException((MissingAssembly)this);
 			}
-			return parser.Expand(type, this, throwOnError, name, false, ignoreCase);
+			return parser.Expand(type, this.ManifestModule, throwOnError, name, false, ignoreCase);
 		}
 
 		public virtual Module LoadModule(string moduleName, byte[] rawModule)

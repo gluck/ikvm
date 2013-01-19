@@ -28,6 +28,7 @@ package java.lang;
 import cli.System.AppDomain;
 import cli.System.EventArgs;
 import cli.System.EventHandler;
+import cli.System.Threading.Monitor;
 
 /**
  * Package-private utility class containing data structures and logic
@@ -59,6 +60,9 @@ class Shutdown {
     // the index of the currently running shutdown hook to the hooks array
     private static int currentRunningHook = 0;
 
+    // [IKVM] have we registered the AppDomain.ProcessExit event handler?
+    private static boolean registeredProcessExit;
+
     /* The preceding static fields are protected by this lock */
     private static class Lock { };
     private static Object lock = new Lock();
@@ -73,7 +77,7 @@ class Shutdown {
         }
     }
     
-    static {
+    private static void registerProcessExit() {
         try {
             // MONOBUG Mono doesn't support starting a new thread during ProcessExit
             // (and application shutdown hooks are based on threads)
@@ -128,6 +132,11 @@ class Shutdown {
             } else {
                 if (state > HOOKS || (state == HOOKS && slot <= currentRunningHook))
                     throw new IllegalStateException("Shutdown in progress");
+            }
+
+            if (!registeredProcessExit) {
+                registeredProcessExit = true;
+                registerProcessExit();
             }
 
             hooks[slot] = hook;
@@ -258,8 +267,17 @@ class Shutdown {
                 break;
             }
         }
-        synchronized (Shutdown.class) {
-            sequence();
+        // [IKVM] We don't block here, because we're being called
+        // from the AppDomain.ProcessExit event and we don't want to
+        // deadlock with the thread that called exit.
+        // Note that our JNI DestroyJavaVM implementation doesn't
+        // call this method.
+        if (Monitor.TryEnter(Shutdown.class)) {
+            try {
+                sequence();
+            } finally {
+                Monitor.Exit(Shutdown.class);
+            }
         }
     }
 

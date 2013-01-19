@@ -1353,7 +1353,7 @@ namespace IKVM.Internal
 						else
 						{
 							MethodInfo overrideMethod = null;
-							MethodAttributes attr = MapMethodAccessModifiers(m.Modifiers) | MethodAttributes.HideBySig;
+							MethodAttributes attr = m.MethodAttributes | MapMethodAccessModifiers(m.Modifiers) | MethodAttributes.HideBySig;
 							if((m.Modifiers & IKVM.Internal.MapXml.MapModifiers.Static) != 0)
 							{
 								attr |= MethodAttributes.Static;
@@ -1467,7 +1467,7 @@ namespace IKVM.Internal
 							}
 						}
 					}
-					return false;
+					return m.Name.StartsWith("__<", StringComparison.Ordinal);
 				}
 
 				internal override void Finish()
@@ -2831,10 +2831,6 @@ namespace IKVM.Internal
 			for(int i = 0; i < references.Count; i++)
 			{
 				AssemblyClassLoader acl = AssemblyClassLoader.FromAssembly(references[i]);
-				if (acl.MainAssembly != references[i])
-				{
-					StaticCompiler.IssueMessage(options, Message.NonPrimaryAssemblyReference, references[i].GetName().Name, acl.MainAssembly.GetName().Name);
-				}
 				if (Array.IndexOf(referencedAssemblies, acl) != -1)
 				{
 					StaticCompiler.IssueMessage(options, Message.DuplicateAssemblyReference, acl.MainAssembly.FullName);
@@ -2904,6 +2900,7 @@ namespace IKVM.Internal
 					}
 					if(asm != null && IsCoreAssembly(asm))
 					{
+						AssemblyClassLoader.PreloadExportedAssemblies(asm);
 						JVM.CoreAssembly = asm;
 						break;
 					}
@@ -3083,7 +3080,15 @@ namespace IKVM.Internal
 			{
 				LoadMappedExceptions(map);
 				Tracer.Info(Tracer.Compiler, "Loading remapped types (2)");
-				FinishRemappedTypes();
+				try
+				{
+					FinishRemappedTypes();
+				}
+				catch (IKVM.Reflection.MissingMemberException x)
+				{
+					StaticCompiler.IssueMissingTypeMessage((Type)x.MemberInfo);
+					return 1;
+				}
 			}
 			Tracer.Info(Tracer.Compiler, "Compiling class files (2)");
 			AddResources(options.resources, options.compressedResources);
@@ -3333,6 +3338,7 @@ namespace IKVM.Internal
 		internal bool guessFileKind;
 		internal Dictionary<string, ClassItem> classes;
 		internal string[] unresolvedReferences;	// only used during command line parsing
+		internal Dictionary<string, string> legacyStubReferences = new Dictionary<string,string>();	// only used during command line parsing
 		internal Assembly[] references;
 		internal string[] peerReferences;
 		internal bool crossReferenceAllPeers = true;
@@ -3436,8 +3442,9 @@ namespace IKVM.Internal
 		InterfaceMethodCantBeInternal = 128,
 		DllExportMustBeStaticMethod = 129,
 		DllExportRequiresSupportedPlatform = 130,
-		NonPrimaryAssemblyReference = 131,
 		DuplicateAssemblyReference = 132,
+		UnableToResolveType = 133,
+		StubsAreDeprecated = 134,
 		UnknownWarning = 999,
 		// This is where the errors start
 		StartErrors = 4000,
@@ -3453,6 +3460,9 @@ namespace IKVM.Internal
 		InvalidMemberSignatureInMapFile = 4010,
 		InvalidPropertyNameInMapFile = 4011,
 		InvalidPropertySignatureInMapFile = 4012,
+		NonPrimaryAssemblyReference = 4013,
+		MissingType = 4014,
+		MissingReference = 4015,
 		// Fatal errors
 		ResponseFileDepthExceeded = 5000,
 		ErrorReadingFile = 5001,
@@ -3507,19 +3517,39 @@ namespace IKVM.Internal
 		AssemblyContainsDuplicateClassNames = 5050,
 		CallerIDRequiresHasCallerIDAnnotation = 5051,
 		UnableToResolveInterface = 5052,
+		MissingBaseType = 5053,
+		MissingBaseTypeReference = 5054,
 	}
 
 	static class StaticCompiler
 	{
-		internal static readonly Universe Universe = new Universe();
+		internal static readonly Universe Universe = new Universe(UniverseOptions.ResolveMissingMembers);
 		internal static Assembly runtimeAssembly;
 		internal static Assembly runtimeJniAssembly;
 		internal static CompilerOptions toplevel;
 		internal static int errorCount;
 
+		static StaticCompiler()
+		{
+			Universe.ResolvedMissingMember += ResolvedMissingMember;
+		}
+
+		private static void ResolvedMissingMember(Module requestingModule, MemberInfo member)
+		{
+			if (requestingModule != null && member is Type)
+			{
+				IssueMessage(Message.UnableToResolveType, requestingModule.Name, ((Type)member).FullName, member.Module.FullyQualifiedName);
+			}
+		}
+
 		internal static Assembly Load(string assemblyString)
 		{
-			return Universe.Load(assemblyString);
+			Assembly asm = Universe.Load(assemblyString);
+			if (asm.__IsMissing)
+			{
+				throw new FileNotFoundException(assemblyString);
+			}
+			return asm;
 		}
 
 		internal static Assembly LoadFile(string path)
@@ -3577,17 +3607,23 @@ namespace IKVM.Internal
 
 		internal static void IssueMessage(CompilerOptions options, Message msgId, params string[] values)
 		{
-			StringBuilder sb = new StringBuilder();
-			sb.Append((int)msgId);
-			if(values.Length > 0)
+			if (errorCount != 0 && msgId < Message.StartErrors)
 			{
-				sb.Append(':').Append(values[0]);
-			}
-			string key = sb.ToString();
-			if(options.suppressWarnings.ContainsKey(key)
-				|| options.suppressWarnings.ContainsKey(((int)msgId).ToString()))
-			{
+				// don't display any warnings after we've emitted an error message
 				return;
+			}
+			string key = ((int)msgId).ToString();
+			for (int i = 0; ; i++)
+			{
+				if (options.suppressWarnings.ContainsKey(key))
+				{
+					return;
+				}
+				if (i == values.Length)
+				{
+					break;
+				}
+				key += ":" + values[i];
 			}
 			options.suppressWarnings.Add(key, key);
 			if(options.writeSuppressWarningsFile != null)
@@ -3724,10 +3760,22 @@ namespace IKVM.Internal
 					msg = "Ignoring @ikvm.lang.DllExport annotation due to unsupported target platform";
 					break;
 				case Message.NonPrimaryAssemblyReference:
-					msg = "Referenced assembly \"{0}\" is not the primary assembly of a shared class loader group, referencing primary assembly \"{1}\" instead";
+					msg = "Referenced assembly \"{0}\" is not the primary assembly of a shared class loader group, please reference primary assembly \"{1}\" instead";
+					break;
+				case Message.MissingType:
+					msg = "Reference to type \"{0}\" claims it is defined in \"{1}\", but it could not be found";
+					break;
+				case Message.MissingReference:
+					msg = "The type '{0}' is defined in an assembly that is not referenced. You must add a reference to assembly '{1}'";
 					break;
 				case Message.DuplicateAssemblyReference:
 					msg = "Duplicate assembly reference \"{0}\"";
+					break;
+				case Message.UnableToResolveType:
+					msg = "Reference in \"{0}\" to type \"{1}\" claims it is defined in \"{2}\", but it could not be found";
+					break;
+				case Message.StubsAreDeprecated:
+					msg = "Compiling stubs is deprecated. Please add a reference to assembly \"{0}\" instead.";
 					break;
 				case Message.UnableToCreateProxy:
 					msg = "Unable to create proxy \"{0}\"" + Environment.NewLine +
@@ -3823,6 +3871,12 @@ namespace IKVM.Internal
 				return tw.Name + ", " + ccl.GetTypeWrapperFactory().ModuleBuilder.Assembly.FullName;
 			}
 			return tw.Name + " (unknown assembly)";
+		}
+
+		internal static void IssueMissingTypeMessage(Type type)
+		{
+			type = ReflectUtil.GetMissingType(type);
+			StaticCompiler.IssueMessage(type.Assembly.__IsMissing ? Message.MissingReference : Message.MissingType, type.FullName, type.Assembly.FullName);
 		}
 	}
 }

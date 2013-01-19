@@ -107,6 +107,10 @@ namespace IKVM.Internal
 			{
 				return val;
 			}
+			else if(tw.IsUnloadable)
+			{
+				throw new FatalCompilerErrorException(Message.MapFileTypeNotFound, tw.Name);
+			}
 			else if(tw.TypeAsTBD.IsEnum)
 			{
 				return EnumHelper.Parse(tw.TypeAsTBD, val);
@@ -331,19 +335,20 @@ namespace IKVM.Internal
 			}
 		}
 
-		private static Assembly GetSystemAssembly()
-		{
-			AssemblyName name = Types.Object.Assembly.GetName();
-			name.Name = "System";
-			return StaticCompiler.Load(name.FullName);
-		}
-
 		private static CustomAttributeBuilder GetEditorBrowsableNever()
 		{
 			if (editorBrowsableNever == null)
 			{
-				Assembly system = GetSystemAssembly();
-				editorBrowsableNever = new CustomAttributeBuilder(system.GetType("System.ComponentModel.EditorBrowsableAttribute", true).GetConstructor(new Type[] { system.GetType("System.ComponentModel.EditorBrowsableState", true) }), new object[] { (int)System.ComponentModel.EditorBrowsableState.Never });
+				// to avoid having to load (and find) System.dll, we construct a symbolic CustomAttributeBuilder
+				AssemblyName name = Types.Object.Assembly.GetName();
+				name.Name = "System";
+				Universe u = StaticCompiler.Universe;
+				Type typeofEditorBrowsableAttribute = u.ResolveType(Types.Object.Assembly, "System.ComponentModel.EditorBrowsableAttribute, " + name.FullName);
+				Type typeofEditorBrowsableState = u.ResolveType(Types.Object.Assembly, "System.ComponentModel.EditorBrowsableState, " + name.FullName);
+				u.MissingTypeIsValueType += delegate(Type type) { return type == typeofEditorBrowsableState; };
+				ConstructorInfo ctor = (ConstructorInfo)typeofEditorBrowsableAttribute.__CreateMissingMethod(ConstructorInfo.ConstructorName,
+					CallingConventions.Standard | CallingConventions.HasThis, null, default(CustomModifiers), new Type[] { typeofEditorBrowsableState }, null);
+				editorBrowsableNever = CustomAttributeBuilder.__FromBlob(ctor, new byte[] { 01, 00, 01, 00, 00, 00, 00, 00 });
 			}
 			return editorBrowsableNever;
 		}
@@ -2387,6 +2392,12 @@ namespace IKVM.Internal
 				{
 					if(methods == null)
 					{
+#if STATIC_COMPILER
+						if(!CheckMissingBaseTypes(TypeAsBaseType))
+						{
+							return methods = MethodWrapper.EmptyArray;
+						}
+#endif
 						LazyPublishMethods();
 					}
 				}
@@ -2402,12 +2413,43 @@ namespace IKVM.Internal
 				{
 					if(fields == null)
 					{
+#if STATIC_COMPILER
+						if (!CheckMissingBaseTypes(TypeAsBaseType))
+						{
+							return fields = FieldWrapper.EmptyArray;
+						}
+#endif
 						LazyPublishFields();
 					}
 				}
 			}
 			return fields;
 		}
+
+#if STATIC_COMPILER
+		private static bool CheckMissingBaseTypes(Type type)
+		{
+			while (type != null)
+			{
+				if (type.__ContainsMissingType)
+				{
+					StaticCompiler.IssueMissingTypeMessage(type);
+					return false;
+				}
+				bool ok = true;
+				foreach (Type iface in type.__GetDeclaredInterfaces())
+				{
+					ok &= CheckMissingBaseTypes(iface);
+				}
+				if (!ok)
+				{
+					return false;
+				}
+				type = type.BaseType;
+			}
+			return true;
+		}
+#endif
 
 		internal MethodWrapper GetMethodWrapper(string name, string sig, bool inherit)
 		{
@@ -2544,7 +2586,7 @@ namespace IKVM.Internal
 			{
 				if(IsUnloadable)
 				{
-					return Types.Object;
+					return ((UnloadableTypeWrapper)this).MissingType ?? Types.Object;
 				}
 				if(IsGhostArray)
 				{
@@ -3131,11 +3173,19 @@ namespace IKVM.Internal
 
 	sealed class UnloadableTypeWrapper : TypeWrapper
 	{
+		internal const string ContainerTypeName = "__<Unloadable>";
+		private readonly Type missingType;
 		private Type customModifier;
 
 		internal UnloadableTypeWrapper(string name)
 			: base(TypeWrapper.UnloadableModifiersHack, name)
 		{
+		}
+
+		internal UnloadableTypeWrapper(Type missingType)
+			: this(missingType.FullName)	// TODO demangle and re-mangle appropriately
+		{
+			this.missingType = missingType;
 		}
 
 		internal UnloadableTypeWrapper(string name, Type customModifier)
@@ -3217,6 +3267,11 @@ namespace IKVM.Internal
 		internal override void Finish()
 		{
 			throw new InvalidOperationException("Finish called on UnloadableTypeWrapper: " + Name);
+		}
+
+		internal Type MissingType
+		{
+			get { return missingType; }
 		}
 
 		internal Type CustomModifier
@@ -3674,7 +3729,14 @@ namespace IKVM.Internal
 			{
 				if(!clinitMethodSet)
 				{
-					clinitMethod = type.GetMethod("__<clinit>", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+					try
+					{
+						clinitMethod = type.GetMethod("__<clinit>", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+					}
+#if STATIC_COMPILER
+					catch (IKVM.Reflection.MissingMemberException) { }
+#endif
+					finally { }
 					clinitMethodSet = true;
 				}
 				return clinitMethod != null;
@@ -4379,10 +4441,13 @@ namespace IKVM.Internal
 				{
 					tw = DotNetTypeWrapper.GetWrapperFromDotNetType(type);
 				}
+				else if (type.DeclaringType != null && type.DeclaringType.FullName == UnloadableTypeWrapper.ContainerTypeName)
+				{
+					tw = new UnloadableTypeWrapper(TypeNameUtil.UnmangleNestedTypeName(type.Name), type);
+				}
 				else
 				{
-					tw = ClassLoaderWrapper.GetWrapperFromType(type)
-						?? new UnloadableTypeWrapper(TypeNameUtil.UnmangleNestedTypeName(type.Name), type);
+					tw = ClassLoaderWrapper.GetWrapperFromType(type);
 				}
 			}
 			if (rank != 0)

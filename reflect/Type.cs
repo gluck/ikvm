@@ -67,6 +67,13 @@ namespace IKVM.Reflection
 
 			// for use by TypeDefImpl
 			NotGenericTypeDefinition = 128,
+
+			// used to cache __ContainsMissingType
+			ContainsMissingType_Unknown = 0,
+			ContainsMissingType_Pending = 256,
+			ContainsMissingType_Yes = 512,
+			ContainsMissingType_No = 256 | 512,
+			ContainsMissingType_Mask = 256 | 512,
 		}
 
 		// prevent subclassing by outsiders
@@ -1007,9 +1014,9 @@ namespace IKVM.Reflection
 			return GetConstructor(bindingAttr, binder, types, modifiers);
 		}
 
-		internal Type ResolveNestedType(TypeName typeName)
+		internal Type ResolveNestedType(Module requester, TypeName typeName)
 		{
-			return FindNestedType(typeName) ?? Module.universe.GetMissingTypeOrThrow(Module, this, typeName);
+			return FindNestedType(typeName) ?? Module.universe.GetMissingTypeOrThrow(requester, Module, this, typeName);
 		}
 
 		// unlike the public API, this takes the namespace and name into account
@@ -1342,22 +1349,44 @@ namespace IKVM.Reflection
 			get { return this.DeclaringType != null; }
 		}
 
-		public virtual bool __ContainsMissingType
+		public bool __ContainsMissingType
 		{
 			get
 			{
-				if (this.__IsMissing)
+				if ((typeFlags & TypeFlags.ContainsMissingType_Mask) == TypeFlags.ContainsMissingType_Unknown)
+				{
+					// Generic parameter constraints can refer back to the type parameter they are part of,
+					// so to prevent infinite recursion, we set the Pending flag during computation.
+					typeFlags |= TypeFlags.ContainsMissingType_Pending;
+					typeFlags = (typeFlags & ~TypeFlags.ContainsMissingType_Mask) | (ContainsMissingTypeImpl ? TypeFlags.ContainsMissingType_Yes : TypeFlags.ContainsMissingType_No);
+				}
+				return (typeFlags & TypeFlags.ContainsMissingType_Mask) == TypeFlags.ContainsMissingType_Yes;
+			}
+		}
+
+		internal static bool ContainsMissingType(Type[] types)
+		{
+			if (types == null)
+			{
+				return false;
+			}
+			foreach (Type type in types)
+			{
+				if (type.__ContainsMissingType)
 				{
 					return true;
 				}
-				foreach (Type arg in this.GetGenericArguments())
-				{
-					if (arg.__ContainsMissingType)
-					{
-						return true;
-					}
-				}
-				return false;
+			}
+			return false;
+		}
+
+		protected virtual bool ContainsMissingTypeImpl
+		{
+			get
+			{
+				return __IsMissing
+					|| ContainsMissingType(GetGenericArguments())
+					|| __GetCustomModifiers().ContainsMissingType;
 			}
 		}
 
@@ -1919,7 +1948,7 @@ namespace IKVM.Reflection
 			MethodSignature methodSig = MethodSignature.MakeFromBuilder(u.System_Void, parameterTypes, new PackedCustomModifiers(), CallingConventions.Standard | CallingConventions.HasThis, 0);
 			MethodBase mb =
 				FindMethod(".ctor", methodSig) ??
-				u.GetMissingMethodOrThrow(this, ".ctor", methodSig);
+				u.GetMissingMethodOrThrow(null, this, ".ctor", methodSig);
 			return (ConstructorInfo)mb;
 		}
 
@@ -2136,7 +2165,7 @@ namespace IKVM.Reflection
 			}
 		}
 
-		public sealed override bool __ContainsMissingType
+		protected sealed override bool ContainsMissingTypeImpl
 		{
 			get
 			{
@@ -2145,7 +2174,8 @@ namespace IKVM.Reflection
 				{
 					type = type.GetElementType();
 				}
-				return type.__ContainsMissingType;
+				return type.__ContainsMissingType
+					|| mods.ContainsMissingType;
 			}
 		}
 
@@ -2898,19 +2928,9 @@ namespace IKVM.Reflection
 			}
 		}
 
-		public override bool __ContainsMissingType
+		protected override bool ContainsMissingTypeImpl
 		{
-			get
-			{
-				foreach (Type type in args)
-				{
-					if (type.__ContainsMissingType)
-					{
-						return true;
-					}
-				}
-				return this.type.__IsMissing;
-			}
+			get { return type.__ContainsMissingType || ContainsMissingType(args); }
 		}
 
 		public override StructLayoutAttribute StructLayoutAttribute
@@ -3032,6 +3052,11 @@ namespace IKVM.Reflection
 			return "<FunctionPtr>";
 		}
 
+		protected override bool ContainsMissingTypeImpl
+		{
+			get { return sig.ContainsMissingType; }
+		}
+
 		internal override bool IsBaked
 		{
 			get { return true; }
@@ -3081,7 +3106,7 @@ namespace IKVM.Reflection
 
 		public override bool __IsMissing
 		{
-			get { throw new InvalidOperationException(); }
+			get { return false; }
 		}
 	}
 }

@@ -60,14 +60,42 @@ namespace IKVM.Internal
 #endif
 		private MethodBase automagicSerializationCtor;
 
-		private static TypeWrapper LoadTypeWrapper(ClassLoaderWrapper classLoader, string name)
+		private TypeWrapper LoadTypeWrapper(ClassLoaderWrapper classLoader, string name)
 		{
 			TypeWrapper tw = classLoader.LoadClassByDottedNameFast(name);
 			if (tw == null)
 			{
 				throw new NoClassDefFoundError(name);
 			}
+			CheckMissing(this, tw);
 			return tw;
+		}
+
+		private static void CheckMissing(TypeWrapper prev, TypeWrapper tw)
+		{
+#if STATIC_COMPILER
+			do
+			{
+				UnloadableTypeWrapper missing = tw as UnloadableTypeWrapper;
+				if (missing != null)
+				{
+					Type mt = ReflectUtil.GetMissingType(missing.MissingType);
+					if (mt.Assembly.__IsMissing)
+					{
+						throw new FatalCompilerErrorException(Message.MissingBaseTypeReference, mt.FullName, mt.Assembly.FullName);
+					}
+					throw new FatalCompilerErrorException(Message.MissingBaseType, mt.FullName, mt.Assembly.FullName,
+						prev.TypeAsBaseType.FullName, prev.TypeAsBaseType.Module.Name);
+				}
+				foreach (TypeWrapper iface in tw.Interfaces)
+				{
+					CheckMissing(tw, iface);
+				}
+				prev = tw;
+				tw = tw.BaseTypeWrapper;
+			}
+			while (tw != null);
+#endif
 		}
 
 #if STATIC_COMPILER
@@ -5097,10 +5125,12 @@ namespace IKVM.Internal
 						interfaceList.Add(iface);
 						// NOTE we're using TypeAsBaseType for the interfaces!
 						Type ifaceType = iface.TypeAsBaseType;
+#if !STATIC_COMPILER
 						if (!iface.IsPublic && !ReflectUtil.IsSameAssembly(ifaceType, typeBuilder))
 						{
 							ifaceType = ReflectUtil.GetAssembly(ifaceType).GetType(DynamicClassLoader.GetProxyHelperName(ifaceType));
 						}
+#endif
 						typeBuilder.AddInterfaceImplementation(ifaceType);
 #if STATIC_COMPILER
 						if (!wrapper.IsInterface)
@@ -5958,7 +5988,10 @@ namespace IKVM.Internal
 			Type[] modopt = Type.EmptyTypes;
 			if (tw.IsUnloadable)
 			{
-				modopt = new Type[] { ((UnloadableTypeWrapper)tw).GetCustomModifier(context) };
+				if (((UnloadableTypeWrapper)tw).MissingType == null)
+				{
+					modopt = new Type[] { ((UnloadableTypeWrapper)tw).GetCustomModifier(context) };
+				}
 			}
 			else
 			{

@@ -1,5 +1,5 @@
 /*
-  Copyright (C) 2002-2010 Jeroen Frijters
+  Copyright (C) 2002-2013 Jeroen Frijters
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -392,8 +392,11 @@ namespace IKVM.Internal
 		{
 			this.assemblyLoader = new AssemblyLoader(assembly);
 			this.references = fixedReferences;
+		}
 
 #if STATIC_COMPILER
+		internal static void PreloadExportedAssemblies(Assembly assembly)
+		{
 			if (assembly.GetManifestResourceInfo("ikvm.exports") != null)
 			{
 				using (Stream stream = assembly.GetManifestResourceStream("ikvm.exports"))
@@ -404,19 +407,23 @@ namespace IKVM.Internal
 					{
 						string assemblyName = rdr.ReadString();
 						int typeCount = rdr.ReadInt32();
-						for (int j = 0; j < typeCount; j++)
-						{
-							rdr.ReadInt32();
-						}
 						if (typeCount != 0)
 						{
-							IkvmcCompiler.resolver.AddHintPath(assemblyName, Path.GetDirectoryName(assembly.Location));
+							for (int j = 0; j < typeCount; j++)
+							{
+								rdr.ReadInt32();
+							}
+							try
+							{
+								StaticCompiler.LoadFile(assembly.Location + "/../" + new AssemblyName(assemblyName).Name + ".dll");
+							}
+							catch { }
 						}
 					}
 				}
 			}
-#endif
 		}
+#endif
 
 		private void DoInitializeExports()
 		{
@@ -534,14 +541,7 @@ namespace IKVM.Internal
 			try
 			{
 #if STATIC_COMPILER || STUB_GENERATOR
-				if (exported)
-				{
-					return StaticCompiler.LoadFile(this.MainAssembly.Location + "/../" + new AssemblyName(name).Name + ".dll");
-				}
-				else
-				{
-					return StaticCompiler.Load(name);
-				}
+				return StaticCompiler.Load(name);
 #else
 				return Assembly.Load(name);
 #endif
@@ -778,6 +778,20 @@ namespace IKVM.Internal
 				yield return (java.net.URL)urls.nextElement();
 			}
 #endif
+			if (!assemblyLoader.HasJavaModule)
+			{
+				if (unmangledName != "" && assemblyLoader.Assembly.GetManifestResourceInfo(unmangledName) != null)
+				{
+					yield return MakeResourceURL(assemblyLoader.Assembly, unmangledName);
+				}
+				foreach (JavaResourceAttribute res in assemblyLoader.Assembly.GetCustomAttributes(typeof(IKVM.Attributes.JavaResourceAttribute), false))
+				{
+					if (res.JavaName == unmangledName)
+					{
+						yield return MakeResourceURL(assemblyLoader.Assembly, res.ResourceName);
+					}
+				}
+			}
 			string name = JVM.MangleResourceName(unmangledName);
 			if (assemblyLoader.Assembly.GetManifestResourceInfo(name) != null)
 			{

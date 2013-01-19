@@ -1,5 +1,5 @@
 /*
-  Copyright (C) 2008-2011 Jeroen Frijters
+  Copyright (C) 2008-2013 Jeroen Frijters
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -39,6 +39,7 @@ namespace IKVM.Reflection.Writer
 		private readonly ModuleBuilder moduleBuilder;
 		private readonly uint strongNameSignatureLength;
 		private readonly ExportTables exportTables;
+		private readonly List<RelocationBlock> relocations = new List<RelocationBlock>();
 
 		internal TextSection(PEWriter peWriter, CliHeader cliHeader, ModuleBuilder moduleBuilder, int strongNameSignatureLength)
 		{
@@ -59,7 +60,7 @@ namespace IKVM.Reflection.Writer
 
 		internal uint BaseRVA
 		{
-			get { return 0x2000; }
+			get { return peWriter.Headers.OptionalHeader.SectionAlignment; }
 		}
 
 		internal uint ImportAddressTableRVA
@@ -69,18 +70,7 @@ namespace IKVM.Reflection.Writer
 
 		internal uint ImportAddressTableLength
 		{
-			get
-			{
-				switch (peWriter.Headers.FileHeader.Machine)
-				{
-					case IMAGE_FILE_HEADER.IMAGE_FILE_MACHINE_I386:
-						return 8;
-					case IMAGE_FILE_HEADER.IMAGE_FILE_MACHINE_ARM:
-						return 0;
-					default:
-						return 16;
-				}
-			}
+			get { return peWriter.Is32Bit ? 8u : 16u; }
 		}
 
 		internal uint ComDescriptorRVA
@@ -220,30 +210,16 @@ namespace IKVM.Reflection.Writer
 
 		internal uint ImportDirectoryLength
 		{
-			get
-			{
-				switch (peWriter.Headers.FileHeader.Machine)
-				{
-					case IMAGE_FILE_HEADER.IMAGE_FILE_MACHINE_ARM:
-						return 0;
-					default:
-						return (ImportHintNameTableRVA - ImportDirectoryRVA) + 27;
-				}
-			}
+			get { return (ImportHintNameTableRVA - ImportDirectoryRVA) + 27; }
 		}
 
 		private uint ImportHintNameTableRVA
 		{
 			get
 			{
-				if (peWriter.Headers.FileHeader.Machine == IMAGE_FILE_HEADER.IMAGE_FILE_MACHINE_I386)
-				{
-					return (ImportDirectoryRVA + 48 + 15) & ~15U;
-				}
-				else
-				{
-					return (ImportDirectoryRVA + 48 + 4 + 15) & ~15U;
-				}
+				return peWriter.Is32Bit
+					? (ImportDirectoryRVA + 48 + 15) & ~15U
+					: (ImportDirectoryRVA + 52 + 15) & ~15U;
 			}
 		}
 
@@ -273,11 +249,12 @@ namespace IKVM.Reflection.Writer
 					case IMAGE_FILE_HEADER.IMAGE_FILE_MACHINE_I386:
 						return 6;
 					case IMAGE_FILE_HEADER.IMAGE_FILE_MACHINE_AMD64:
+					case IMAGE_FILE_HEADER.IMAGE_FILE_MACHINE_ARM:
 						return 12;
 					case IMAGE_FILE_HEADER.IMAGE_FILE_MACHINE_IA64:
 						return 48;
 					default:
-						return 0;
+						throw new NotSupportedException();
 				}
 			}
 		}
@@ -452,6 +429,22 @@ namespace IKVM.Reflection.Writer
 				mw.Write((ushort)0x25FF);
 				mw.Write((uint)peWriter.Headers.OptionalHeader.ImageBase + ImportAddressTableRVA);
 			}
+			else if (peWriter.Headers.FileHeader.Machine == IMAGE_FILE_HEADER.IMAGE_FILE_MACHINE_ARM)
+			{
+				uint rva = (uint)peWriter.Headers.OptionalHeader.ImageBase + ImportAddressTableRVA;
+				ushort lo = (ushort)rva;
+				ushort hi = (ushort)(rva >> 16);
+				mw.Write((ushort)(0xF240 + (lo >> 12)));
+				mw.Write((ushort)(0x0C00 + ((lo << 4) & 0xF000) + (lo & 0xFF)));
+				mw.Write((ushort)(0xF2C0 + (hi >> 12)));
+				mw.Write((ushort)(0x0C00 + ((hi << 4) & 0xF000) + (hi & 0xFF)));
+				mw.Write((ushort)0xF8DC);
+				mw.Write((ushort)0xF000);
+			}
+			else
+			{
+				throw new NotSupportedException();
+			}
 		}
 
 		[Conditional("DEBUG")]
@@ -523,10 +516,11 @@ namespace IKVM.Reflection.Writer
 						stubLength = 8;
 						break;
 					case IMAGE_FILE_HEADER.IMAGE_FILE_MACHINE_AMD64:
+					case IMAGE_FILE_HEADER.IMAGE_FILE_MACHINE_ARM:
 						stubLength = 16;
 						break;
 					default:
-						throw new NotImplementedException();
+						throw new NotSupportedException();
 				}
 			}
 
@@ -576,7 +570,7 @@ namespace IKVM.Reflection.Writer
 				{
 					if (text.moduleBuilder.unmanagedExports[pos].ordinal == i + ordinalBase)
 					{
-						mw.Write(stubsRVA + (uint)pos * stubLength);
+						mw.Write(text.peWriter.Thumb + stubsRVA + (uint)pos * stubLength);
 						pos++;
 					}
 					else
@@ -656,8 +650,17 @@ namespace IKVM.Reflection.Writer
 								mw.Write((byte)0xE0);
 								mw.Write(0); // alignment
 								break;
+							case IMAGE_FILE_HEADER.IMAGE_FILE_MACHINE_ARM:
+								mw.Write((ushort)0xF8DF);
+								mw.Write((ushort)0xC008);
+								mw.Write((ushort)0xF8DC);
+								mw.Write((ushort)0xC000);
+								mw.Write((ushort)0x4760);
+								mw.Write((ushort)0xDEFE);
+								mw.Write((uint)text.peWriter.Headers.OptionalHeader.ImageBase + text.moduleBuilder.unmanagedExports[pos].rva.initializedDataOffset + sdataRVA);
+								break;
 							default:
-								throw new NotImplementedException();
+								throw new NotSupportedException();
 						}
 						pos++;
 					}
@@ -682,15 +685,34 @@ namespace IKVM.Reflection.Writer
 				return x.ordinal.CompareTo(y.ordinal);
 			}
 
-			internal void WriteRelocations(MetadataWriter mw)
+			internal void GetRelocations(List<Relocation> list)
 			{
+				ushort type;
+				uint rva;
+				switch (text.peWriter.Headers.FileHeader.Machine)
+				{
+					case IMAGE_FILE_HEADER.IMAGE_FILE_MACHINE_I386:
+						type = 0x3000;
+						rva = stubsRVA + 2;
+						break;
+					case IMAGE_FILE_HEADER.IMAGE_FILE_MACHINE_AMD64:
+						type = 0xA000;
+						rva = stubsRVA + 2;
+						break;
+					case IMAGE_FILE_HEADER.IMAGE_FILE_MACHINE_ARM:
+						type = 0x3000;
+						rva = stubsRVA + 12;
+						break;
+					default:
+						throw new NotSupportedException();
+				}
+
 				// we assume that unmanagedExports is still sorted by ordinal
 				for (int i = 0, pos = 0; i < entries; i++)
 				{
 					if (text.moduleBuilder.unmanagedExports[pos].ordinal == i + ordinalBase)
 					{
-						// both I386 and AMD64 have the address at offset 2
-						text.WriteRelocationBlock(mw, stubsRVA + 2 + (uint)pos * stubLength);
+						list.Add(new Relocation(type, rva + (uint)pos * stubLength));
 						pos++;
 					}
 				}
@@ -774,7 +796,7 @@ namespace IKVM.Reflection.Writer
 			// Import Lookup Table
 			mw.Write(ImportHintNameTableRVA);		// Hint/Name Table RVA
 			int size = 48;
-			if (peWriter.Headers.FileHeader.Machine != IMAGE_FILE_HEADER.IMAGE_FILE_MACHINE_I386)
+			if (!peWriter.Is32Bit)
 			{
 				size += 4;
 				mw.Write(0);
@@ -809,47 +831,92 @@ namespace IKVM.Reflection.Writer
 			get { return (int)(StartupStubRVA - BaseRVA + StartupStubLength); }
 		}
 
-		internal void WriteRelocations(MetadataWriter mw)
+		struct Relocation : IComparable<Relocation>
 		{
-			uint relocAddress = this.StartupStubRVA;
-			switch (peWriter.Headers.FileHeader.Machine)
+			internal readonly uint rva;
+			internal readonly ushort type;
+
+			internal Relocation(ushort type, uint rva)
 			{
-				case IMAGE_FILE_HEADER.IMAGE_FILE_MACHINE_I386:
-				case IMAGE_FILE_HEADER.IMAGE_FILE_MACHINE_AMD64:
-					relocAddress += 2;
-					break;
-				case IMAGE_FILE_HEADER.IMAGE_FILE_MACHINE_IA64:
-					relocAddress += 0x20;
-					break;
+				this.type = type;
+				this.rva = rva;
 			}
-			WriteRelocationBlock(mw, relocAddress);
-			if (exportTables != null)
+
+			int IComparable<Relocation>.CompareTo(Relocation other)
 			{
-				exportTables.WriteRelocations(mw);
+				return rva.CompareTo(other.rva);
 			}
 		}
 
-		// note that we're lazy and write a new relocation block for every relocation
-		// even if they are in the same page (since there is typically only one anyway)
-		private void WriteRelocationBlock(MetadataWriter mw, uint relocAddress)
+		struct RelocationBlock
 		{
-			uint pageRVA = relocAddress & ~0xFFFU;
-			mw.Write(pageRVA);	// PageRVA
-			mw.Write(0x000C);	// Block Size
+			internal readonly uint PageRVA;
+			internal readonly ushort[] TypeOffset;
+
+			internal RelocationBlock(uint pageRva, ushort[] typeOffset)
+			{
+				this.PageRVA = pageRva;
+				this.TypeOffset = typeOffset;
+			}
+		}
+
+		internal void WriteRelocations(MetadataWriter mw)
+		{
+			foreach (RelocationBlock block in relocations)
+			{
+				mw.Write(block.PageRVA);
+				mw.Write(8 + block.TypeOffset.Length * 2);
+				foreach (ushort typeOffset in block.TypeOffset)
+				{
+					mw.Write(typeOffset);
+				}
+			}
+		}
+
+		internal uint PackRelocations()
+		{
+			List<Relocation> list = new List<Relocation>();
 			switch (peWriter.Headers.FileHeader.Machine)
 			{
 				case IMAGE_FILE_HEADER.IMAGE_FILE_MACHINE_I386:
-					mw.Write(0x3000 + relocAddress - pageRVA);				// Type / Offset
+					list.Add(new Relocation(0x3000, this.StartupStubRVA + 2));
 					break;
 				case IMAGE_FILE_HEADER.IMAGE_FILE_MACHINE_AMD64:
-					mw.Write(0xA000 + relocAddress - pageRVA);				// Type / Offset
+					list.Add(new Relocation(0xA000, this.StartupStubRVA + 2));
 					break;
 				case IMAGE_FILE_HEADER.IMAGE_FILE_MACHINE_IA64:
-					// on IA64 the StartupStubRVA is 16 byte aligned, so these two addresses won't cross a page boundary
-					mw.Write((short)(0xA000 + relocAddress - pageRVA));		// Type / Offset
-					mw.Write((short)(0xA000 + relocAddress - pageRVA + 8));	// Type / Offset
+					list.Add(new Relocation(0xA000, this.StartupStubRVA + 0x20));
+					list.Add(new Relocation(0xA000, this.StartupStubRVA + 0x28));
 					break;
+				case IMAGE_FILE_HEADER.IMAGE_FILE_MACHINE_ARM:
+					list.Add(new Relocation(0x7000, this.StartupStubRVA));
+					break;
+				default:
+					throw new NotSupportedException();
 			}
+			if (exportTables != null)
+			{
+				exportTables.GetRelocations(list);
+			}
+			list.Sort();
+			uint size = 0;
+			for (int i = 0; i < list.Count; )
+			{
+				uint pageRVA = list[i].rva & ~0xFFFU;
+				int count = 1;
+				while (i + count < list.Count && (list[i + count].rva & ~0xFFFU) == pageRVA)
+				{
+					count++;
+				}
+				ushort[] typeOffset = new ushort[(count + 1) & ~1];
+				for (int j = 0; j < count; j++, i++)
+				{
+					typeOffset[j] = (ushort)(list[i].type + (list[i].rva - pageRVA));
+				}
+				relocations.Add(new RelocationBlock(pageRVA, typeOffset));
+				size += (uint)(8 + typeOffset.Length * 2);
+			}
+			return size;
 		}
 	}
 }

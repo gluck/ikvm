@@ -1,5 +1,5 @@
 /*
-  Copyright (C) 2009-2012 Jeroen Frijters
+  Copyright (C) 2009-2013 Jeroen Frijters
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -77,6 +77,46 @@ namespace IKVM.Reflection
 
 	public delegate Assembly ResolveEventHandler(object sender, ResolveEventArgs args);
 
+	public delegate void ResolvedMissingMemberHandler(Module requestingModule, MemberInfo member);
+
+	/*
+	 * UniverseOptions:
+	 *
+	 *   None
+	 *		Default behavior, most compatible with System.Reflection[.Emit]
+	 *
+	 *   EnableFunctionPointers
+	 *		Normally function pointers in signatures are replaced by System.IntPtr
+	 *		(for compatibility with System.Reflection), when this option is enabled
+	 *		they are represented as first class types (Type.__IsFunctionPointer will
+	 *		return true for them).
+	 *
+	 *   DisableFusion
+	 *      Don't use native Fusion API to resolve assembly names.
+	 *
+	 *   DisablePseudoCustomAttributeRetrieval
+	 *      Set this option to disable the generaton of pseudo-custom attributes
+	 *      when querying custom attributes.
+	 *
+	 *   DontProvideAutomaticDefaultConstructor
+	 *      Normally TypeBuilder, like System.Reflection.Emit, will provide a default
+	 *      constructor for types that meet the requirements. By enabling this
+	 *      option this behavior is disabled.
+	 *
+	 *   MetadataOnly
+	 *      By default, when a module is read in, the stream is kept open to satisfy
+	 *      subsequent lazy loading. In MetadataOnly mode only the metadata is read in
+	 *      and after that the stream is closed immediately. Subsequent lazy loading
+	 *      attempts will fail with an InvalidOperationException.
+	 *      APIs that are not available is MetadataOnly mode are:
+	 *      - Module.ResolveString()
+	 *      - Module.GetSignerCertificate()
+	 *      - Module.GetManifestResourceStream()
+	 *      - Module.__ReadDataFromRVA()
+	 *      - MethodBase.GetMethodBody()
+	 *      - FieldInfo.__GetDataFromRVA()
+	 */
+
 	[Flags]
 	public enum UniverseOptions
 	{
@@ -85,6 +125,8 @@ namespace IKVM.Reflection
 		DisableFusion = 2,
 		DisablePseudoCustomAttributeRetrieval = 4,
 		DontProvideAutomaticDefaultConstructor = 8,
+		MetadataOnly = 16,
+		ResolveMissingMembers = 32,
 	}
 
 	public sealed class Universe : IDisposable
@@ -101,6 +143,7 @@ namespace IKVM.Reflection
 		private readonly bool useNativeFusion;
 		private readonly bool returnPseudoCustomAttributes;
 		private readonly bool automaticallyProvideDefaultConstructor;
+		private readonly UniverseOptions options;
 		private Type typeof_System_Object;
 		private Type typeof_System_ValueType;
 		private Type typeof_System_Enum;
@@ -167,10 +210,12 @@ namespace IKVM.Reflection
 
 		public Universe(UniverseOptions options)
 		{
+			this.options = options;
 			enableFunctionPointers = (options & UniverseOptions.EnableFunctionPointers) != 0;
 			useNativeFusion = (options & UniverseOptions.DisableFusion) == 0 && GetUseNativeFusion();
 			returnPseudoCustomAttributes = (options & UniverseOptions.DisablePseudoCustomAttributeRetrieval) == 0;
 			automaticallyProvideDefaultConstructor = (options & UniverseOptions.DontProvideAutomaticDefaultConstructor) == 0;
+			resolveMissingMembers = (options & UniverseOptions.ResolveMissingMembers) != 0;
 		}
 
 		private static bool GetUseNativeFusion()
@@ -196,7 +241,7 @@ namespace IKVM.Reflection
 		{
 			if (Mscorlib.__IsMissing)
 			{
-				return Mscorlib.ResolveType(new TypeName(type.Namespace, type.Name));
+				return Mscorlib.ResolveType(null, new TypeName(type.Namespace, type.Name));
 			}
 			// We use FindType instead of ResolveType here, because on some versions of mscorlib some of
 			// the special types we use/support are missing and the type properties are defined to
@@ -210,7 +255,7 @@ namespace IKVM.Reflection
 			// Primitive here means that these types have a special metadata encoding, which means that
 			// there can be references to them without referring to them by name explicitly.
 			// We want these types to be usable even when they don't exist in mscorlib or there is no mscorlib loaded.
-			return Mscorlib.FindType(new TypeName("System", name)) ?? GetMissingType(Mscorlib.ManifestModule, null, new TypeName("System", name));
+			return Mscorlib.FindType(new TypeName("System", name)) ?? GetMissingType(null, Mscorlib.ManifestModule, null, new TypeName("System", name));
 		}
 
 		internal Type System_Object
@@ -576,20 +621,15 @@ namespace IKVM.Reflection
 				}
 				return Import(type.GetGenericTypeDefinition()).MakeGenericType(importedArgs);
 			}
-			else if (type.IsNested)
-			{
-				// note that we can't pass in the namespace here, because .NET's Type.Namespace implementation is broken for nested types
-				// (it returns the namespace of the declaring type)
-				return Import(type.DeclaringType).ResolveNestedType(new TypeName(null, type.Name));
-			}
 			else if (type.Assembly == typeof(object).Assembly)
 			{
 				// make sure mscorlib types always end up in our mscorlib
-				return Mscorlib.ResolveType(new TypeName(type.Namespace, type.Name));
+				return ResolveType(Mscorlib, type.FullName);
 			}
 			else
 			{
-				return Import(type.Assembly).ResolveType(new TypeName(type.Namespace, type.Name));
+				// FXBUG we parse the FullName here, because type.Namespace and type.Name are both broken on the CLR
+				return ResolveType(Import(type.Assembly), type.FullName);
 			}
 		}
 
@@ -601,7 +641,25 @@ namespace IKVM.Reflection
 		public RawModule OpenRawModule(string path)
 		{
 			path = Path.GetFullPath(path);
-			return OpenRawModule(new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read), path);
+			FileStream fs = null;
+			RawModule module;
+			try
+			{
+				fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+				module = OpenRawModule(fs, path);
+				if (!MetadataOnly)
+				{
+					fs = null;
+				}
+			}
+			finally
+			{
+				if (fs != null)
+				{
+					fs.Close();
+				}
+			}
+			return module;
 		}
 
 		public RawModule OpenRawModule(Stream stream, string location)
@@ -697,7 +755,7 @@ namespace IKVM.Reflection
 			return Load(refname, null, true);
 		}
 
-		internal Assembly Load(string refname, Assembly requestingAssembly, bool throwOnError)
+		internal Assembly Load(string refname, Module requestingModule, bool throwOnError)
 		{
 			Assembly asm = GetLoadedAssembly(refname);
 			if (asm != null)
@@ -710,7 +768,7 @@ namespace IKVM.Reflection
 			}
 			else
 			{
-				ResolveEventArgs args = new ResolveEventArgs(refname, requestingAssembly);
+				ResolveEventArgs args = new ResolveEventArgs(refname, requestingModule == null ? null : requestingModule.Assembly);
 				foreach (ResolveEventHandler evt in resolvers)
 				{
 					asm = evt(this, args);
@@ -816,7 +874,7 @@ namespace IKVM.Reflection
 			{
 				return null;
 			}
-			return parser.GetType(this, context, throwOnError, assemblyQualifiedTypeName, false, ignoreCase);
+			return parser.GetType(this, context == null ? null : context.ManifestModule, throwOnError, assemblyQualifiedTypeName, false, ignoreCase);
 		}
 
 		// this is similar to GetType(Assembly context, string assemblyQualifiedTypeName, bool throwOnError),
@@ -829,7 +887,7 @@ namespace IKVM.Reflection
 			{
 				return null;
 			}
-			return parser.GetType(this, context, false, assemblyQualifiedTypeName, true, false);
+			return parser.GetType(this, context == null ? null : context.ManifestModule, false, assemblyQualifiedTypeName, true, false);
 		}
 
 		public Assembly[] GetAssemblies()
@@ -934,6 +992,7 @@ namespace IKVM.Reflection
 			return asm;
 		}
 
+		[Obsolete("Please set UniverseOptions.ResolveMissingMembers instead.")]
 		public void EnableMissingMemberResolution()
 		{
 			resolveMissingMembers = true;
@@ -977,7 +1036,7 @@ namespace IKVM.Reflection
 			}
 		}
 
-		private Type GetMissingType(Module module, Type declaringType, TypeName typeName)
+		private Type GetMissingType(Module requester, Module module, Type declaringType, TypeName typeName)
 		{
 			if (missingTypes == null)
 			{
@@ -990,14 +1049,18 @@ namespace IKVM.Reflection
 				type = new MissingType(module, declaringType, typeName.Namespace, typeName.Name);
 				missingTypes.Add(stn, type);
 			}
+			if (ResolvedMissingMember != null && !module.Assembly.__IsMissing)
+			{
+				ResolvedMissingMember(requester, type);
+			}
 			return type;
 		}
 
-		internal Type GetMissingTypeOrThrow(Module module, Type declaringType, TypeName typeName)
+		internal Type GetMissingTypeOrThrow(Module requester, Module module, Type declaringType, TypeName typeName)
 		{
 			if (resolveMissingMembers || module.Assembly.__IsMissing)
 			{
-				return GetMissingType(module, declaringType, typeName);
+				return GetMissingType(requester, module, declaringType, typeName);
 			}
 			string fullName = TypeNameParser.Escape(typeName.ToString());
 			if (declaringType != null)
@@ -1007,36 +1070,50 @@ namespace IKVM.Reflection
 			throw new TypeLoadException(String.Format("Type '{0}' not found in assembly '{1}'", fullName, module.Assembly.FullName));
 		}
 
-		internal MethodBase GetMissingMethodOrThrow(Type declaringType, string name, MethodSignature signature)
+		internal MethodBase GetMissingMethodOrThrow(Module requester, Type declaringType, string name, MethodSignature signature)
 		{
 			if (resolveMissingMembers)
 			{
-				MethodInfo method = new MissingMethod(declaringType, name, signature);
+				MethodBase method = new MissingMethod(declaringType, name, signature);
 				if (name == ".ctor")
 				{
-					return new ConstructorInfoImpl(method);
+					method = new ConstructorInfoImpl((MethodInfo)method);
+				}
+				if (ResolvedMissingMember != null)
+				{
+					ResolvedMissingMember(requester, method);
 				}
 				return method;
 			}
 			throw new MissingMethodException(declaringType.ToString(), name);
 		}
 
-		internal FieldInfo GetMissingFieldOrThrow(Type declaringType, string name, FieldSignature signature)
+		internal FieldInfo GetMissingFieldOrThrow(Module requester, Type declaringType, string name, FieldSignature signature)
 		{
 			if (resolveMissingMembers)
 			{
-				return new MissingField(declaringType, name, signature);
+				FieldInfo field = new MissingField(declaringType, name, signature);
+				if (ResolvedMissingMember != null)
+				{
+					ResolvedMissingMember(requester, field);
+				}
+				return field;
 			}
 			throw new MissingFieldException(declaringType.ToString(), name);
 		}
 
-		internal PropertyInfo GetMissingPropertyOrThrow(Type declaringType, string name, PropertySignature propertySignature)
+		internal PropertyInfo GetMissingPropertyOrThrow(Module requester, Type declaringType, string name, PropertySignature propertySignature)
 		{
 			// HACK we need to check __IsMissing here, because Type doesn't have a FindProperty API
 			// since properties are never resolved, except by custom attributes
 			if (resolveMissingMembers || declaringType.__IsMissing)
 			{
-				return new MissingProperty(declaringType, name, propertySignature);
+				PropertyInfo property = new MissingProperty(declaringType, name, propertySignature);
+				if (ResolvedMissingMember != null && !declaringType.__IsMissing)
+				{
+					ResolvedMissingMember(requester, property);
+				}
+				return property;
 			}
 			throw new System.MissingMemberException(declaringType.ToString(), name);
 		}
@@ -1068,6 +1145,8 @@ namespace IKVM.Reflection
 			return new __StandAloneMethodSig(false, 0, callingConvention, returnType ?? this.System_Void, Util.Copy(parameterTypes), Util.Copy(optionalParameterTypes),
 				PackedCustomModifiers.CreateFromExternal(returnTypeCustomModifiers, parameterTypeCustomModifiers, Util.NullSafeLength(parameterTypes) + Util.NullSafeLength(optionalParameterTypes)));
 		}
+
+		public event ResolvedMissingMemberHandler ResolvedMissingMember;
 
 		public event Predicate<Type> MissingTypeIsValueType
 		{
@@ -1105,6 +1184,11 @@ namespace IKVM.Reflection
 		internal bool AutomaticallyProvideDefaultConstructor
 		{
 			get { return automaticallyProvideDefaultConstructor; }
+		}
+
+		internal bool MetadataOnly
+		{
+			get { return (options & UniverseOptions.MetadataOnly) != 0; }
 		}
 	}
 }
