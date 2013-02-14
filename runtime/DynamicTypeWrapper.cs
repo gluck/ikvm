@@ -2327,7 +2327,7 @@ namespace IKVM.Internal
 					{
 						// skip
 					}
-					else if (baseMethod.IsFinal && (baseMethod.IsPublic || baseMethod.IsProtected || baseMethod.DeclaringType.IsPackageAccessibleFrom(wrapper)))
+					else if (baseMethod.IsFinal && (baseMethod.IsPublic || baseMethod.IsProtected || IsAccessibleInternal(baseMethod) || baseMethod.DeclaringType.IsPackageAccessibleFrom(wrapper)))
 					{
 						throw new VerifyError("final method " + baseMethod.Name + baseMethod.Signature + " in " + baseMethod.DeclaringType.Name + " is overridden in " + wrapper.Name);
 					}
@@ -2335,12 +2335,12 @@ namespace IKVM.Internal
 					{
 						// skip
 					}
-					else if (topPublicOrProtectedMethod == null && !baseMethod.IsPublic && !baseMethod.IsProtected && !baseMethod.DeclaringType.IsPackageAccessibleFrom(wrapper))
+					else if (topPublicOrProtectedMethod == null && !baseMethod.IsPublic && !baseMethod.IsProtected && !IsAccessibleInternal(baseMethod) && !baseMethod.DeclaringType.IsPackageAccessibleFrom(wrapper))
 					{
 						// this is a package private method that we're not overriding (unless its vtable stream interleaves ours, which is a case we handle below)
 						explicitOverride = true;
 					}
-					else if (topPublicOrProtectedMethod != null && baseMethod.IsFinal && !baseMethod.IsPublic && !baseMethod.IsProtected && !baseMethod.DeclaringType.IsPackageAccessibleFrom(wrapper))
+					else if (topPublicOrProtectedMethod != null && baseMethod.IsFinal && !baseMethod.IsPublic && !baseMethod.IsProtected && !IsAccessibleInternal(baseMethod) && !baseMethod.DeclaringType.IsPackageAccessibleFrom(wrapper))
 					{
 						// this is package private final method that we would override had it not been final, but which is ignored by HotSpot (instead of throwing a VerifyError)
 						explicitOverride = true;
@@ -2451,6 +2451,11 @@ namespace IKVM.Internal
 					tw = baseMethod.DeclaringType.BaseTypeWrapper;
 				}
 				return null;
+			}
+
+			private bool IsAccessibleInternal(MethodWrapper mw)
+			{
+				return mw.IsInternal && mw.DeclaringType.InternalsVisibleTo(wrapper);
 			}
 
 			private static MethodBase LinkAndGetMethod(MethodWrapper mw)
