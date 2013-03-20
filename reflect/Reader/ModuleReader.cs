@@ -1,5 +1,5 @@
 /*
-  Copyright (C) 2009-2012 Jeroen Frijters
+  Copyright (C) 2009-2013 Jeroen Frijters
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -759,6 +759,16 @@ namespace IKVM.Reflection.Reader
 			}
 		}
 
+		public override CustomModifiers __ResolveTypeSpecCustomModifiers(int typeSpecToken, Type[] genericTypeArguments, Type[] genericMethodArguments)
+		{
+			int index = (typeSpecToken & 0xFFFFFF) - 1;
+			if (typeSpecToken >> 24 != TypeSpecTable.Index || index < 0 || index >= TypeSpec.RowCount)
+			{
+				throw TokenOutOfRangeException(typeSpecToken);
+			}
+			return CustomModifiers.Read(this, ByteReader.FromBlob(blobHeap, TypeSpec.records[index]), new GenericContext(genericTypeArguments, genericMethodArguments));
+		}
+
 		public override string ScopeName
 		{
 			get { return GetString(ModuleTable.records[0].Name); }
@@ -1048,7 +1058,7 @@ namespace IKVM.Reflection.Reader
 				{
 					name.hash = GetBlobCopy(AssemblyRef.records[i].HashValue);
 				}
-				name.Flags = (AssemblyNameFlags)AssemblyRef.records[i].Flags;
+				name.RawFlags = (AssemblyNameFlags)AssemblyRef.records[i].Flags;
 				list.Add(name);
 			}
 			return list.ToArray();
@@ -1145,9 +1155,9 @@ namespace IKVM.Reflection.Reader
 			return peFile.RvaToFileOffset((uint)rva);
 		}
 
-		public override bool __GetSectionInfo(int rva, out string name, out int characteristics)
+		public override bool __GetSectionInfo(int rva, out string name, out int characteristics, out int virtualAddress, out int virtualSize, out int pointerToRawData, out int sizeOfRawData)
 		{
-			return peFile.GetSectionInfo(rva, out name, out characteristics);
+			return peFile.GetSectionInfo(rva, out name, out characteristics, out virtualAddress, out virtualSize, out pointerToRawData, out sizeOfRawData);
 		}
 
 		public override int __ReadDataFromRVA(int rva, byte[] data, int offset, int length)

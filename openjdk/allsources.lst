@@ -7,7 +7,6 @@
 ../classpath/ikvm/internal/HasCallerID.java
 ../classpath/ikvm/internal/JMath.java
 ../classpath/ikvm/internal/MonoUtils.java
-../classpath/ikvm/internal/stubgen/StubGenerator.java
 ../classpath/ikvm/internal/Util.java
 ../classpath/ikvm/internal/WeakIdentityMap.java
 ../classpath/ikvm/io/InputStreamWrapper.java
@@ -20,6 +19,7 @@
 ../classpath/ikvm/runtime/AppDomainAssemblyClassLoader.java
 ../classpath/ikvm/runtime/ClassPathAssemblyClassLoader.java
 ../classpath/ikvm/runtime/Delegates.java
+../classpath/ikvm/runtime/EnumerationWrapper.java
 ../classpath/ikvm/runtime/Startup.java
 ../classpath/ikvm/runtime/Util.java
 ../classpath/java/util/concurrent/atomic/AtomicBoolean.java
@@ -132,6 +132,7 @@ java/util/concurrent/locks/LockSupport.java
 java/util/ResourceBundle.java
 java/util/TimeZone.java
 java/util/zip/Adler32.java
+java/util/zip/ClassStubZipEntry.java
 java/util/zip/CRC32.java
 java/util/zip/Deflater.java
 java/util/zip/DeflaterConstants.java
@@ -11392,8 +11393,10 @@ sun/security/jgss/wrapper/SunNativeProvider.java
 @OPENJDK7@/jdk/src/share/classes/sun/awt/im/SimpleInputMethodWindow.java
 @OPENJDK7@/jdk/src/share/classes/sun/awt/image/BufferedImageDevice.java
 @OPENJDK7@/jdk/src/share/classes/sun/awt/image/BufferedImageGraphicsConfig.java
+@OPENJDK7@/jdk/src/share/classes/sun/awt/image/ByteArrayImageSource.java
 @OPENJDK7@/jdk/src/share/classes/sun/awt/image/ByteBandedRaster.java
 @OPENJDK7@/jdk/src/share/classes/sun/awt/image/ByteInterleavedRaster.java
+@OPENJDK7@/jdk/src/share/classes/sun/awt/image/FileImageSource.java
 @OPENJDK7@/jdk/src/share/classes/sun/awt/image/ImageConsumerQueue.java
 @OPENJDK7@/jdk/src/share/classes/sun/awt/image/ImageDecoder.java
 @OPENJDK7@/jdk/src/share/classes/sun/awt/image/ImageFetchable.java
@@ -11874,6 +11877,7 @@ sun/security/jgss/wrapper/SunNativeProvider.java
 @OPENJDK7@/jdk/src/share/classes/sun/java2d/StateTrackableDelegate.java
 @OPENJDK7@/jdk/src/share/classes/sun/java2d/StateTracker.java
 @OPENJDK7@/jdk/src/share/classes/sun/java2d/Surface.java
+@OPENJDK7@/jdk/src/share/classes/sun/launcher/LauncherHelper.java
 @OPENJDK7@/jdk/src/share/classes/sun/management/Agent.java
 @OPENJDK7@/jdk/src/share/classes/sun/management/AgentConfigurationError.java
 @OPENJDK7@/jdk/src/share/classes/sun/management/ClassLoadingImpl.java

@@ -51,22 +51,6 @@ namespace IKVM.Internal
 			DynamicClassLoader.SaveDebugImages();
 		}
 
-#if !FIRST_PASS
-		public static java.lang.reflect.Method FindMainMethod(java.lang.Class clazz)
-		{
-			// This method exists because we don't use Class.getDeclaredMethods(),
-			// since that could cause us to run into NoClassDefFoundError if any of the
-			// method signatures references a missing class.
-			TypeWrapper tw = TypeWrapper.FromClass(clazz);
-			MethodWrapper mw = tw.GetMethodWrapper("main", "([Ljava.lang.String;)V", true);
-			if (mw != null && mw.IsStatic)
-			{
-				return (java.lang.reflect.Method)mw.ToMethodOrConstructor(true);
-			}
-			return null;
-		}
-#endif
-
 		public static bool ClassUnloading
 		{
 #if CLASSGC
@@ -83,6 +67,12 @@ namespace IKVM.Internal
 			get { return JVM.relaxedVerification; }
 			set { JVM.relaxedVerification = value; }
 		}
+
+		public static bool AllowNonVirtualCalls
+		{
+			get { return JVM.AllowNonVirtualCalls; }
+			set { JVM.AllowNonVirtualCalls = value; }
+		}
 	}
 }
 #endif // !STATIC_COMPILER && !STUB_GENERATOR
@@ -91,6 +81,7 @@ namespace IKVM.Internal
 {
 	static class JVM
 	{
+		internal const string JarClassList = "--ikvm-classes--/";
 #if STATIC_COMPILER
 		internal const bool FinishingForDebugSave = false;
 		internal const bool IsSaveDebugImage = false;
@@ -103,7 +94,21 @@ namespace IKVM.Internal
 #endif
 #endif // STATIC_COMPILER
 		private static Assembly coreAssembly;
+#if !STUB_GENERATOR
 		internal static bool relaxedVerification = true;
+		internal static bool AllowNonVirtualCalls;
+#endif
+
+#if !STATIC_COMPILER && !STUB_GENERATOR && !FIRST_PASS
+		static JVM()
+		{
+			if (SafeGetEnvironmentVariable("IKVM_SAVE_DYNAMIC_ASSEMBLIES") != null)
+			{
+				IsSaveDebugImage = true;
+				java.lang.Runtime.getRuntime().addShutdownHook(new java.lang.Thread(ikvm.runtime.Delegates.toRunnable(DynamicClassLoader.SaveDebugImages)));
+			}
+		}
+#endif
 
 		internal static Version SafeGetAssemblyVersion(System.Reflection.Assembly asm)
 		{
@@ -268,11 +273,18 @@ namespace IKVM.Internal
 				message = String.Format("****** Critical Failure: {1} ******{0}{0}" +
 					"PLEASE FILE A BUG REPORT FOR IKVM.NET WHEN YOU SEE THIS MESSAGE{0}{0}" +
 					(messageBox != null ? "(on Windows you can use Ctrl+C to copy the contents of this message to the clipboard){0}{0}" : "") +
-					"{2}{0}" + 
+					"{2}{0}" +
 					"{3}{0}" +
-					"{4}",
+					"{4} {5}-bit{0}{0}" +
+					"{6}{0}" + 
+					"{7}{0}" +
+					"{8}",
 					Environment.NewLine,
 					message,
+					System.Reflection.Assembly.GetExecutingAssembly().FullName,
+					System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory(),
+					Environment.Version,
+					IntPtr.Size * 8,
 					x,
 					x != null ? new StackTrace(x, true).ToString() : "",
 					new StackTrace(true));
@@ -420,25 +432,25 @@ namespace IKVM.Internal
 		}
 
 #if !STATIC_COMPILER && !STUB_GENERATOR
-		internal static object NewAnnotation(object classLoader, object definition)
+		internal static object NewAnnotation(java.lang.ClassLoader classLoader, object definition)
 		{
 #if FIRST_PASS
 			return null;
 #else
-			return ikvm.@internal.AnnotationAttributeBase.newAnnotation((java.lang.ClassLoader)classLoader, definition);
+			return ikvm.@internal.AnnotationAttributeBase.newAnnotation(classLoader, definition);
 #endif
 		}
 #endif
 
 #if !STATIC_COMPILER && !STUB_GENERATOR
-		internal static object NewAnnotationElementValue(object classLoader, object expectedClass, object definition)
+		internal static object NewAnnotationElementValue(java.lang.ClassLoader classLoader, java.lang.Class expectedClass, object definition)
 		{
 #if FIRST_PASS
 			return null;
 #else
 			try
 			{
-				return ikvm.@internal.AnnotationAttributeBase.decodeElementValue(definition, (java.lang.Class)expectedClass, (java.lang.ClassLoader)classLoader);
+				return ikvm.@internal.AnnotationAttributeBase.decodeElementValue(definition, expectedClass, classLoader);
 			}
 			catch(java.lang.IllegalAccessException)
 			{

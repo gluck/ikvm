@@ -39,6 +39,25 @@ namespace IKVM.Internal
 				|| String.CompareOrdinal(path, 0, RootPath, 0, RootPath.Length) == 0;
 		}
 
+		internal static string GetAssemblyClassesPath(Assembly asm)
+		{
+#if FIRST_PASS
+			return null;
+#else
+			// we can't use java.io.File.separatorChar here, because we're invoked by the system property setup code
+			return RootPath + "assembly" + System.IO.Path.DirectorySeparatorChar + VfsAssembliesDirectory.GetName(asm) + System.IO.Path.DirectorySeparatorChar + "classes" + System.IO.Path.DirectorySeparatorChar;
+#endif
+		}
+
+		internal static string GetAssemblyResourcesPath(Assembly asm)
+		{
+#if FIRST_PASS
+			return null;
+#else
+			return RootPath + "assembly" + System.IO.Path.DirectorySeparatorChar + VfsAssembliesDirectory.GetName(asm) + System.IO.Path.DirectorySeparatorChar + "resources" + System.IO.Path.DirectorySeparatorChar;
+#endif
+		}
+
 #if !FIRST_PASS
 		private static VfsDirectory root;
 
@@ -108,25 +127,6 @@ namespace IKVM.Internal
 					return list;
 				}
 			}
-		}
-
-		internal static string GetAssemblyClassesPath(Assembly asm)
-		{
-#if FIRST_PASS
-			return null;
-#else
-			// we can't use java.io.File.separatorChar here, because we're invoked by the system property setup code
-			return RootPath + "assembly" + System.IO.Path.DirectorySeparatorChar + VfsAssembliesDirectory.GetName(asm) + System.IO.Path.DirectorySeparatorChar + "classes" + System.IO.Path.DirectorySeparatorChar;
-#endif
-		}
-
-		internal static string GetAssemblyResourcesPath(Assembly asm)
-		{
-#if FIRST_PASS
-			return null;
-#else
-			return RootPath + "assembly" + System.IO.Path.DirectorySeparatorChar + VfsAssembliesDirectory.GetName(asm) + System.IO.Path.DirectorySeparatorChar + "resources" + System.IO.Path.DirectorySeparatorChar;
-#endif
 		}
 
 		private sealed class VfsAssembliesDirectory : VfsDirectory
@@ -563,7 +563,7 @@ namespace IKVM.Internal
 		private sealed class VfsAssemblyClass : VfsFile
 		{
 			private readonly TypeWrapper tw;
-			private byte[] buf;
+			private volatile byte[] buf;
 
 			internal VfsAssemblyClass(TypeWrapper tw)
 			{
@@ -575,7 +575,10 @@ namespace IKVM.Internal
 #if !FIRST_PASS
 				if (buf == null)
 				{
-					buf = ikvm.@internal.stubgen.StubGenerator.generateStub(tw.ClassObject);
+					System.IO.MemoryStream mem = new System.IO.MemoryStream();
+					bool includeNonPublicInterfaces = !"true".Equals(java.lang.Props.props.getProperty("ikvm.stubgen.skipNonPublicInterfaces"), StringComparison.OrdinalIgnoreCase);
+					IKVM.StubGen.StubGenerator.WriteClass(mem, tw, includeNonPublicInterfaces, false, false);
+					buf = mem.ToArray();
 				}
 #endif
 			}
@@ -617,8 +620,8 @@ namespace IKVM.Internal
 
 		private sealed class VfsZipEntry : VfsFile
 		{
-			private java.util.zip.ZipFile zipFile;
-			private java.util.zip.ZipEntry entry;
+			private readonly java.util.zip.ZipFile zipFile;
+			private readonly java.util.zip.ZipEntry entry;
 
 			internal VfsZipEntry(java.util.zip.ZipFile zipFile, java.util.zip.ZipEntry entry)
 			{
@@ -639,7 +642,7 @@ namespace IKVM.Internal
 
 		private sealed class VfsCacertsEntry : VfsFile
 		{
-			private byte[] buf;
+			private volatile byte[] buf;
 
 			internal override long Size
 			{
@@ -818,10 +821,10 @@ namespace IKVM.Internal
 			return root.GetEntry(0, path);
 		}
 
-		private sealed class ZipEntryStream : System.IO.Stream
+		internal sealed class ZipEntryStream : System.IO.Stream
 		{
-			private java.util.zip.ZipFile zipFile;
-			private java.util.zip.ZipEntry entry;
+			private readonly java.util.zip.ZipFile zipFile;
+			private readonly java.util.zip.ZipEntry entry;
 			private java.io.InputStream inp;
 			private long position;
 
@@ -982,7 +985,7 @@ namespace IKVM.Internal
 #if FIRST_PASS
 			return false;
 #else
-			return access == IKVM.NativeCode.java.io.Win32FileSystem.ACCESS_READ && GetVfsEntry(path) != null;
+			return access == Java_java_io_Win32FileSystem.ACCESS_READ && GetVfsEntry(path) != null;
 #endif
 		}
 

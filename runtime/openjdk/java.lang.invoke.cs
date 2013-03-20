@@ -1,5 +1,5 @@
 /*
-  Copyright (C) 2011 Jeroen Frijters
+  Copyright (C) 2011-2013 Jeroen Frijters
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -82,7 +82,6 @@ static class Java_java_lang_invoke_CallSite
 
 static class Java_java_lang_invoke_DirectMethodHandle
 {
-	// TODO what is lookupClass for?
     public static object createDelegate(MethodType type, MemberName m, bool doDispatch, jlClass lookupClass)
 	{
 #if FIRST_PASS
@@ -118,6 +117,45 @@ static class Java_java_lang_invoke_DirectMethodHandle
 			TypeWrapper tw = (TypeWrapper)typeof(MemberName).GetField("vmtarget", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(m);
 			tw.Finish();
 			MethodWrapper mw = tw.GetMethods()[index];
+			if (mw.IsDynamicOnly)
+			{
+				MethodHandleUtil.DynamicMethodBuilder dm = new MethodHandleUtil.DynamicMethodBuilder("CustomInvoke:" + mw.Name, type, (ICustomInvoke)mw);
+				if (mw.IsStatic)
+				{
+					dm.LoadNull();
+					dm.BoxArgs(0);
+				}
+				else
+				{
+					dm.Ldarg(0);
+					dm.BoxArgs(1);
+				}
+				dm.Callvirt(typeof(ICustomInvoke).GetMethod("Invoke"));
+				dm.Convert(typeof(object), type.returnType(), 0);
+				dm.Ret();
+				return dm.CreateDelegate();
+			}
+			// HACK this code is duplicated in compiler.cs
+			if (mw.IsProtected && (mw.DeclaringType == CoreClasses.java.lang.Object.Wrapper || mw.DeclaringType == CoreClasses.java.lang.Throwable.Wrapper))
+			{
+				TypeWrapper thisType = TypeWrapper.FromClass(lookupClass);
+				TypeWrapper cli_System_Object = ClassLoaderWrapper.LoadClassCritical("cli.System.Object");
+				TypeWrapper cli_System_Exception = ClassLoaderWrapper.LoadClassCritical("cli.System.Exception");
+				// HACK we may need to redirect finalize or clone from java.lang.Object/Throwable
+				// to a more specific base type.
+				if (thisType.IsAssignableTo(cli_System_Object))
+				{
+					mw = cli_System_Object.GetMethodWrapper(mw.Name, mw.Signature, true);
+				}
+				else if (thisType.IsAssignableTo(cli_System_Exception))
+				{
+					mw = cli_System_Exception.GetMethodWrapper(mw.Name, mw.Signature, true);
+				}
+				else if (thisType.IsAssignableTo(CoreClasses.java.lang.Throwable.Wrapper))
+				{
+					mw = CoreClasses.java.lang.Throwable.Wrapper.GetMethodWrapper(mw.Name, mw.Signature, true);
+				}
+			}
 			mw.ResolveMethod();
 			MethodInfo mi = mw.GetMethod() as MethodInfo;
 			if (mi != null
@@ -378,6 +416,12 @@ static partial class MethodHandleUtil
 			ilgen.Emit(OpCodes.Ldarg_0);
 		}
 
+		internal DynamicMethodBuilder(string name, MethodType type, ICustomInvoke target)
+			: this(name, type, null, target, null, null)
+		{
+			ilgen.Emit(OpCodes.Ldarg_0);
+		}
+
 		internal DynamicMethodBuilder(string name, MethodType type, MethodHandle target, object value)
 			: this(name, type, typeof(Container<,>).MakeGenericType(target.vmtarget.GetType(), value.GetType()), target.vmtarget, value, null)
 		{
@@ -533,6 +577,26 @@ static partial class MethodHandleUtil
 		internal AdapterMethodHandle CreateAdapter()
 		{
 			return new AdapterMethodHandle(type, CreateDelegate());
+		}
+
+		internal void BoxArgs(int start)
+		{
+			int paramCount = type.parameterCount();
+			ilgen.EmitLdc_I4(paramCount - start);
+			ilgen.Emit(OpCodes.Newarr, Types.Object);
+			for (int i = start; i < paramCount; i++)
+			{
+				ilgen.Emit(OpCodes.Dup);
+				ilgen.EmitLdc_I4(i - start);
+				Ldarg(i);
+				Convert(type.parameterType(i), typeof(object), 0);
+				ilgen.Emit(OpCodes.Stelem_Ref);
+			}
+		}
+
+		internal void LoadNull()
+		{
+			ilgen.Emit(OpCodes.Ldnull);
 		}
 	}
 
@@ -735,7 +799,7 @@ static partial class MethodHandleUtil
 			}
 			else
 			{
-				dst.EmitCheckcast(null, ilgen);
+				dst.EmitCheckcast(ilgen);
 			}
 		}
 	}

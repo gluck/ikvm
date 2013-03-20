@@ -1,5 +1,5 @@
 /*
-  Copyright (C) 2002-2012 Jeroen Frijters
+  Copyright (C) 2002-2013 Jeroen Frijters
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -58,11 +58,11 @@ namespace IKVM.Internal
 	abstract class MemberWrapper
 	{
 		private HandleWrapper handle;
-		private TypeWrapper declaringType;
-		private Modifiers modifiers;
+		private readonly TypeWrapper declaringType;
+		private readonly Modifiers modifiers;
 		private MemberFlags flags;
-		private string name;
-		private string sig;
+		private readonly string name;
+		private readonly string sig;
 
 		private sealed class HandleWrapper
 		{
@@ -169,7 +169,7 @@ namespace IKVM.Internal
 
 		private bool IsPublicOrProtectedMemberAccessible(TypeWrapper caller, TypeWrapper instance)
 		{
-			if (IsPublic || (IsProtected && caller.IsSubTypeOf(DeclaringType) && (IsStatic || instance.IsSubTypeOf(caller))))
+			if (IsPublic || (IsProtected && caller.IsSubTypeOf(DeclaringType) && (IsStatic || instance.IsUnloadable || instance.IsSubTypeOf(caller))))
 			{
 				return DeclaringType.IsPublic || InPracticeInternalsVisibleTo(caller);
 			}
@@ -356,7 +356,7 @@ namespace IKVM.Internal
 	interface ICustomInvoke
 	{
 #if !STATIC_COMPILER && !FIRST_PASS && !STUB_GENERATOR
-		object Invoke(object obj, object[] args, ikvm.@internal.CallerID callerID);
+		object Invoke(object obj, object[] args);
 #endif
 	}
 
@@ -476,7 +476,7 @@ namespace IKVM.Internal
 					parameterTypes[i] = argTypes[i].EnsureLoadable(loader).ClassObject;
 				}
 				java.lang.Class[] checkedExceptions = GetExceptions();
-				if (this.Name == StringConstants.INIT)
+				if (this.IsConstructor)
 				{
 					method = new java.lang.reflect.Constructor(
 						this.DeclaringType.ClassObject,
@@ -731,46 +731,6 @@ namespace IKVM.Internal
 			}
 		}
 
-		// this returns the Java method's attributes in .NET terms (e.g. used to create stubs for this method)
-		internal MethodAttributes GetMethodAttributes()
-		{
-			MethodAttributes attribs = MethodAttributes.HideBySig;
-			if(IsStatic)
-			{
-				attribs |= MethodAttributes.Static;
-			}
-			if(IsPublic)
-			{
-				attribs |= MethodAttributes.Public;
-			}
-			else if(IsPrivate)
-			{
-				attribs |= MethodAttributes.Private;
-			}
-			else if(IsProtected)
-			{
-				attribs |= MethodAttributes.FamORAssem;
-			}
-			else
-			{
-				attribs |= MethodAttributes.Family;
-			}
-			// constructors aren't virtual
-			if(!IsStatic && !IsPrivate && Name != "<init>")
-			{
-				attribs |= MethodAttributes.Virtual;
-			}
-			if(IsFinal)
-			{
-				attribs |= MethodAttributes.Final;
-			}
-			if(IsAbstract)
-			{
-				attribs |= MethodAttributes.Abstract;
-			}
-			return attribs;
-		}
-
 		internal bool IsAbstract
 		{
 			get
@@ -786,7 +746,7 @@ namespace IKVM.Internal
 #if FIRST_PASS
 			return null;
 #else
-			if (ReferenceEquals(Name, StringConstants.INIT))
+			if (IsConstructor)
 			{
 				java.lang.reflect.Constructor cons = (java.lang.reflect.Constructor)ToMethodOrConstructor(false);
 				if (obj == null)
@@ -794,7 +754,7 @@ namespace IKVM.Internal
 					sun.reflect.ConstructorAccessor acc = cons.getConstructorAccessor();
 					if (acc == null)
 					{
-						acc = (sun.reflect.ConstructorAccessor)IKVM.NativeCode.sun.reflect.ReflectionFactory.newConstructorAccessor0(null, cons);
+						acc = (sun.reflect.ConstructorAccessor)Java_sun_reflect_ReflectionFactory.newConstructorAccessor0(null, cons);
 						cons.setConstructorAccessor(acc);
 					}
 					return acc.newInstance(args);
@@ -860,7 +820,7 @@ namespace IKVM.Internal
 					{
 						if (!invokenonvirtualCache.TryGetValue(this, out acc))
 						{
-							acc = new IKVM.NativeCode.sun.reflect.ReflectionFactory.FastMethodAccessorImpl((java.lang.reflect.Method)ToMethodOrConstructor(false), true);
+							acc = new Java_sun_reflect_ReflectionFactory.FastMethodAccessorImpl((java.lang.reflect.Method)ToMethodOrConstructor(false), true);
 							invokenonvirtualCache.Add(this, acc);
 						}
 					}
@@ -878,7 +838,7 @@ namespace IKVM.Internal
 				sun.reflect.MethodAccessor acc = method.getMethodAccessor();
 				if (acc == null)
 				{
-					acc = (sun.reflect.MethodAccessor)IKVM.NativeCode.sun.reflect.ReflectionFactory.newMethodAccessor(null, method);
+					acc = (sun.reflect.MethodAccessor)Java_sun_reflect_ReflectionFactory.newMethodAccessor(null, method);
 					method.setMethodAccessor(acc);
 				}
 				object val = acc.invoke(obj, args, (ikvm.@internal.CallerID)callerID);
@@ -1007,6 +967,11 @@ namespace IKVM.Internal
 		{
 			get { return false; }
 		}
+
+		internal bool IsConstructor
+		{
+			get { return (object)Name == (object)StringConstants.INIT; }
+		}
 	}
 
 	// placeholder for <clinit> method that exist in ClassFile but not in TypeWrapper
@@ -1090,8 +1055,8 @@ namespace IKVM.Internal
 
 	sealed class SimpleCallMethodWrapper : MethodWrapper
 	{
-		private SimpleOpCode call;
-		private SimpleOpCode callvirt;
+		private readonly SimpleOpCode call;
+		private readonly SimpleOpCode callvirt;
 
 		internal SimpleCallMethodWrapper(TypeWrapper declaringType, string name, string sig, MethodInfo method, TypeWrapper returnType, TypeWrapper[] parameterTypes, Modifiers modifiers, MemberFlags flags, SimpleOpCode call, SimpleOpCode callvirt)
 			: base(declaringType, name, sig, method, returnType, parameterTypes, modifiers, flags)
@@ -1134,6 +1099,116 @@ namespace IKVM.Internal
 		protected override void NewobjImpl(CodeEmitter ilgen)
 		{
 			ilgen.Emit(OpCodes.Newobj, GetMethod());
+		}
+#endif // !STUB_GENERATOR
+	}
+
+	abstract class MirandaMethodWrapper : SmartMethodWrapper
+	{
+		private readonly MethodWrapper ifmethod;
+
+		private MirandaMethodWrapper(TypeWrapper declaringType, MethodWrapper ifmethod, Modifiers modifiers)
+			: base(declaringType, ifmethod.Name, ifmethod.Signature, null, null, null, modifiers, MemberFlags.HideFromReflection | MemberFlags.MirandaMethod)
+		{
+			this.ifmethod = ifmethod;
+		}
+
+		private sealed class AbstractMirandaMethodWrapper : MirandaMethodWrapper
+		{
+			internal AbstractMirandaMethodWrapper(TypeWrapper declaringType, MethodWrapper ifmethod)
+				: base(declaringType, ifmethod, Modifiers.Public | Modifiers.Abstract)
+			{
+			}
+		}
+
+		private sealed class DefaultMirandaMethodWrapper : MirandaMethodWrapper
+		{
+			internal DefaultMirandaMethodWrapper(TypeWrapper declaringType, MethodWrapper ifmethod)
+				: base(declaringType, ifmethod, Modifiers.Public)
+			{
+			}
+		}
+
+		private sealed class ErrorMirandaMethodWrapper : MirandaMethodWrapper
+		{
+			private string error;
+
+			internal ErrorMirandaMethodWrapper(TypeWrapper declaringType, MethodWrapper ifmethod, string error)
+				: base(declaringType, ifmethod, Modifiers.Public)
+			{
+				this.error = error;
+			}
+
+			protected override MirandaMethodWrapper AddConflictError(MethodWrapper mw)
+			{
+				error += " " + mw.DeclaringType.Name + "." + mw.Name;
+				return this;
+			}
+
+			internal override string Error
+			{
+				get { return error; }
+			}
+		}
+
+		internal static MirandaMethodWrapper Create(TypeWrapper declaringType, MethodWrapper ifmethod)
+		{
+			return ifmethod.IsAbstract
+				? (MirandaMethodWrapper)new AbstractMirandaMethodWrapper(declaringType, ifmethod)
+				: (MirandaMethodWrapper)new DefaultMirandaMethodWrapper(declaringType, ifmethod);
+		}
+
+		internal MirandaMethodWrapper Update(MethodWrapper mw)
+		{
+			if (ifmethod == mw)
+			{
+				// an interface can be implemented multiple times
+				return this;
+			}
+			else if (mw.DeclaringType.ImplementsInterface(ifmethod.DeclaringType))
+			{
+				return Create(DeclaringType, mw);
+			}
+			else if (!ifmethod.IsAbstract && !mw.IsAbstract)
+			{
+				return AddConflictError(mw);
+			}
+			else if (!ifmethod.IsAbstract && mw.IsAbstract)
+			{
+				return new ErrorMirandaMethodWrapper(DeclaringType, mw, DeclaringType.Name + "." + Name + Signature);
+			}
+			else
+			{
+				return this;
+			}
+		}
+
+		protected virtual MirandaMethodWrapper AddConflictError(MethodWrapper mw)
+		{
+			return new ErrorMirandaMethodWrapper(DeclaringType, ifmethod, "Conflicting default methods:")
+				.AddConflictError(ifmethod)
+				.AddConflictError(mw);
+		}
+
+		internal MethodWrapper BaseMethod
+		{
+			get { return ifmethod; }
+		}
+
+		internal virtual string Error
+		{
+			get { return null; }
+		}
+
+#if !STUB_GENERATOR
+		protected override void CallImpl(CodeEmitter ilgen)
+		{
+			ilgen.Emit(OpCodes.Call, GetMethod());
+		}
+
+		protected override void CallvirtImpl(CodeEmitter ilgen)
+		{
+			ilgen.Emit(OpCodes.Callvirt, GetMethod());
 		}
 #endif // !STUB_GENERATOR
 	}
@@ -1491,7 +1566,7 @@ namespace IKVM.Internal
 #else
 			if (jniAccessor == null)
 			{
-				jniAccessor = IKVM.NativeCode.sun.reflect.ReflectionFactory.NewFieldAccessorJNI(this);
+				Interlocked.CompareExchange(ref jniAccessor, Java_sun_reflect_ReflectionFactory.NewFieldAccessorJNI(this), null);
 			}
 			return jniAccessor;
 #endif
@@ -1913,8 +1988,8 @@ namespace IKVM.Internal
 
 	sealed class CompiledAccessStubFieldWrapper : FieldWrapper
 	{
-		private MethodInfo getter;
-		private MethodInfo setter;
+		private readonly MethodInfo getter;
+		private readonly MethodInfo setter;
 
 		private static Modifiers GetModifiers(PropertyInfo property)
 		{

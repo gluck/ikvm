@@ -1,4 +1,27 @@
 <?xml version="1.0"?>
+<!--
+  Copyright (C) 2002-2013 Jeroen Frijters
+
+  This software is provided 'as-is', without any express or implied
+  warranty.  In no event will the authors be held liable for any damages
+  arising from the use of this software.
+
+  Permission is granted to anyone to use this software for any purpose,
+  including commercial applications, and to alter it and redistribute it
+  freely, subject to the following restrictions:
+
+  1. The origin of this software must not be misrepresented; you must not
+     claim that you wrote the original software. If you use this software
+     in a product, an acknowledgment in the product documentation would be
+     appreciated but is not required.
+  2. Altered source versions must be plainly marked as such, and must not be
+     misrepresented as being the original software.
+  3. This notice may not be removed or altered from any source distribution.
+
+  Jeroen Frijters
+  jeroen@frijters.net
+  
+-->
 <project name="ikvm" default="managed">
     <include buildfile="ikvm.include" />
     <target name="native">
@@ -36,6 +59,8 @@
     <target name="clean-managed">
         <delete failonerror="false">
             <fileset>
+                <include name="CommonAssemblyInfo.cs" />
+                <include name="awt/AssemblyInfo.cs" />
                 <include name="bin/IKVM.AWT.WinForms.dll" />
                 <include name="bin/IKVM.MSBuild.dll" />
                 <include name="bin/IKVM.MSBuild.Java.Targets" />
@@ -57,20 +82,24 @@
                 <include name="openjdk/*.jar" />
                 <include name="openjdk/allsources.gen.lst" />
                 <include name="openjdk/AssemblyInfo.java" />
+                <include name="openjdk/copyright.txt" />
+                <include name="openjdk/java/lang/PropertyConstants.java" />
+                <include name="openjdk/MANIFEST.MF" />
+                <include name="openjdk/resources.zip" />
                 <include name="openjdk/response.gen.txt" />
                 <include name="openjdk/tools.gen.rsp" />
                 <include name="openjdk/vfs.zip" />
                 <include name="openjdk/**.class" />
+                <include name="openjdk/AssemblyInfo.cs" />
+                <include name="openjdk/JniAssemblyInfo.cs" />
                 <include name="runtime/*.dll" />
                 <include name="runtime/*.jar" />
-                <include name="tools/asmref.exe" />
-                <include name="tools/depcheck.exe" />
-                <include name="tools/pubkey.exe" />
+                <include name="tools/*.exe" />
+                <include name="tools/*.dll" />
                 <include name="tools/pubkey.txt" />
-                <include name="tools/updbaseaddresses.exe" />
-                <include name="tools/writeappconfig.exe" />
             </fileset>
         </delete>
+        <nant buildfile="nuget/nupkg.build" target="clean" />
     </target>
     <target name="clean-native">
         <delete failonerror="false">
@@ -78,6 +107,7 @@
                 <include name="bin/libikvm-native.so" />
                 <include name="bin/ikvm-native-win32-x64.dll" />
                 <include name="bin/ikvm-native-win32-x86.dll" />
+                <include name="native/ikvm-native.rc" />
                 <include name="native/Release-x64/ikvm-native.dll" />
                 <include name="native/Release-x64/*.obj" />
                 <include name="native/Release-x86/ikvm-native.dll" />

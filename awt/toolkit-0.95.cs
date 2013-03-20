@@ -26,7 +26,7 @@
 /*
 Copyright (C) 2002, 2004-2009 Jeroen Frijters
 Copyright (C) 2006 Active Endpoints, Inc.
-Copyright (C) 2006-2011 Volker Berlin (i-net software)
+Copyright (C) 2006-2013 Volker Berlin (i-net software)
 Copyright (C) 2010-2011 Karsten Heinrich (i-net software)
 
 This software is provided 'as-is', without any express or implied
@@ -597,7 +597,7 @@ namespace ikvm.awt
             }
             catch (Exception)
             {
-                return new NoImage();
+                return new NoImage(new sun.awt.image.FileImageSource(filename));
             }
         }
 
@@ -618,7 +618,7 @@ namespace ikvm.awt
             }
             catch
             {
-                return new NoImage();
+                return new NoImage(new sun.awt.image.URLImageSource(url));
             }
         }
 
@@ -640,7 +640,7 @@ namespace ikvm.awt
             }
             catch (Exception)
             {
-                return new NoImage();//TODO should throw the exception unstead of NoImage()
+                return new NoImage(new sun.awt.image.ByteArrayImageSource(imagedata, imageoffset, imagelength));
             }
         }
 
@@ -3671,15 +3671,68 @@ namespace ikvm.awt
         }
 	}
 
-    sealed class NetTextAreaPeer : NetTextComponentPeer<java.awt.TextArea>, java.awt.peer.TextAreaPeer
+    sealed class NetTextAreaPeer : NetComponentPeer<java.awt.TextArea, RichTextBox>, java.awt.peer.TextAreaPeer
 	{
 		public NetTextAreaPeer(java.awt.TextArea textArea)
 			: base(textArea)
 		{
 			control.ReadOnly = !((java.awt.TextArea)target).isEditable();
 			control.WordWrap = false;
-			control.ScrollBars = ScrollBars.Both;
+			control.ScrollBars = RichTextBoxScrollBars.Both;
 			control.Multiline = true;
+			control.AutoSize = false;
+			control.Text = target.getText();
+		}
+
+		public override bool isFocusable()
+		{
+			return true;
+		}
+
+		public int getSelectionEnd()
+		{
+			return NetToolkit.Invoke<int>(delegate { return control.SelectionStart + control.SelectionLength; });
+		}
+
+		public int getSelectionStart()
+		{
+			return NetToolkit.Invoke<int>(delegate { return control.SelectionStart; });
+		}
+
+		public string getText()
+		{
+			return NetToolkit.Invoke<string>(delegate { return control.Text; });
+		}
+
+		public void setText(string text)
+		{
+			NetToolkit.Invoke(delegate { control.Text = text; });
+		}
+
+		public void select(int start_pos, int end_pos)
+		{
+			throw new NotImplementedException();
+		}
+
+		public void setEditable(bool editable)
+		{
+			throw new NotImplementedException();
+		}
+
+		public int getCaretPosition()
+		{
+			return getSelectionStart();
+		}
+
+		private void setCaretPositionImpl(int pos)
+		{
+			control.SelectionStart = pos;
+			control.SelectionLength = 0;
+		}
+
+		public void setCaretPosition(int pos)
+		{
+			NetToolkit.Invoke(setCaretPositionImpl, pos);
 		}
 
 		public void insert(string text, int pos)
@@ -3720,11 +3773,22 @@ namespace ikvm.awt
 
 		public void replaceRange(string text, int start_pos, int end_pos)
 		{
-			throw new NotImplementedException();
+			NetToolkit.Invoke(delegate { control.Text = control.Text.Substring(0, start_pos) + text + control.Text.Substring(end_pos); });
 		}
+
 		public void replaceText(string text, int start_pos, int end_pos)
 		{
+			replaceRange(text, start_pos, end_pos);
+		}
+
+		public java.awt.im.InputMethodRequests getInputMethodRequests()
+		{
 			throw new NotImplementedException();
+		}
+
+		protected sealed override RichTextBox CreateControl()
+		{
+			return new RichTextBox();
 		}
 	}
 
@@ -5168,6 +5232,7 @@ namespace ikvm.awt
             }
         }
 
+        [System.Security.SecuritySafeCritical]
         public bool isWindowUnderMouse(java.awt.Window window)
         {
             if (NetToolkit.isWin32())

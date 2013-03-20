@@ -1,5 +1,5 @@
 /*
-  Copyright (C) 2002-2012 Jeroen Frijters
+  Copyright (C) 2002-2013 Jeroen Frijters
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -2381,7 +2381,11 @@ sealed class MethodAnalyzer
 		StackState stack = new StackState(state[index]);
 		NormalizedByteCode invoke = method.Instructions[index].NormalizedOpCode;
 		ClassFile.ConstantPoolItemMI cpi = GetMethodref(method.Instructions[index].Arg1);
-		if ((cpi is ClassFile.ConstantPoolItemInterfaceMethodref) != (invoke == NormalizedByteCode.__invokeinterface))
+		if (invoke == NormalizedByteCode.__invokestatic && classFile.MajorVersion >= 52)
+		{
+			// invokestatic may be used to invoke interface methods in Java 8
+		}
+		else if ((cpi is ClassFile.ConstantPoolItemInterfaceMethodref) != (invoke == NormalizedByteCode.__invokeinterface))
 		{
 			throw new VerifyError("Illegal constant pool index");
 		}
@@ -2564,17 +2568,15 @@ sealed class MethodAnalyzer
 						case NormalizedByteCode.__ldc:
 							switch(classFile.GetConstantPoolConstantType(instructions[i].Arg1))
 							{
-#if STATIC_COMPILER
 								case ClassFile.ConstantType.Class:
 								{
 									TypeWrapper tw = classFile.GetConstantPoolClassType(instructions[i].Arg1);
 									if(tw.IsUnloadable)
 									{
-										SetHardError(wrapper.GetClassLoader(), ref instructions[i], HardError.NoClassDefFoundError, "{0}", tw.Name);
+										ConditionalPatchNoClassDefFoundError(ref instructions[i], tw);
 									}
 									break;
 								}
-#endif
 								case ClassFile.ConstantType.MethodType:
 								{
 									ClassFile.ConstantPoolItemMethodType cpi = classFile.GetConstantPoolConstantMethodType(instructions[i].Arg1);
@@ -2586,7 +2588,7 @@ sealed class MethodAnalyzer
 									}
 									if(tw.IsUnloadable)
 									{
-										SetHardError(wrapper.GetClassLoader(), ref instructions[i], HardError.NoClassDefFoundError, "{0}", tw.Name);
+										ConditionalPatchNoClassDefFoundError(ref instructions[i], tw);
 									}
 									break;
 								}
@@ -2600,9 +2602,7 @@ sealed class MethodAnalyzer
 							TypeWrapper tw = classFile.GetConstantPoolClassType(instructions[i].Arg1);
 							if(tw.IsUnloadable)
 							{
-#if STATIC_COMPILER
-								SetHardError(wrapper.GetClassLoader(), ref instructions[i], HardError.NoClassDefFoundError, "{0}", tw.Name);
-#endif
+								ConditionalPatchNoClassDefFoundError(ref instructions[i], tw);
 							}
 							else if(!tw.IsAccessibleFrom(wrapper))
 							{
@@ -2620,9 +2620,7 @@ sealed class MethodAnalyzer
 							TypeWrapper tw = classFile.GetConstantPoolClassType(instructions[i].Arg1);
 							if(tw.IsUnloadable)
 							{
-#if STATIC_COMPILER
-								SetHardError(wrapper.GetClassLoader(), ref instructions[i], HardError.NoClassDefFoundError, "{0}", tw.Name);
-#endif
+								ConditionalPatchNoClassDefFoundError(ref instructions[i], tw);
 							}
 							else if(!tw.IsAccessibleFrom(wrapper))
 							{
@@ -2637,7 +2635,7 @@ sealed class MethodAnalyzer
 							if(tw.IsUnloadable)
 							{
 								// If the type is unloadable, we always generate the dynamic code
-								// (regardless of JVM.DisableDynamicBinding), because at runtime,
+								// (regardless of ClassLoaderWrapper.DisableDynamicBinding), because at runtime,
 								// null references should always pass thru without attempting
 								// to load the type (for Sun compatibility).
 							}
@@ -2653,9 +2651,7 @@ sealed class MethodAnalyzer
 							TypeWrapper tw = stack.PopArrayType();
 							if(tw.IsUnloadable)
 							{
-#if STATIC_COMPILER
-								SetHardError(wrapper.GetClassLoader(), ref instructions[i], HardError.NoClassDefFoundError, "{0}", tw.Name);
-#endif
+								ConditionalPatchNoClassDefFoundError(ref instructions[i], tw);
 							}
 							break;
 						}
@@ -2666,9 +2662,7 @@ sealed class MethodAnalyzer
 							TypeWrapper tw = stack.PopArrayType();
 							if(tw.IsUnloadable)
 							{
-#if STATIC_COMPILER
-								SetHardError(wrapper.GetClassLoader(), ref instructions[i], HardError.NoClassDefFoundError, "{0}", tw.Name);
-#endif
+								ConditionalPatchNoClassDefFoundError(ref instructions[i], tw);
 							}
 							break;
 						}
@@ -2680,41 +2674,12 @@ sealed class MethodAnalyzer
 		}
 	}
 
-	private static TypeWrapper FirstUnloadable(ClassFile.ConstantPoolItemMethodHandle cpi)
-	{
-		if (cpi.GetClassType().IsUnloadable)
-		{
-			return cpi.GetClassType();
-		}
-		ClassFile.ConstantPoolItemMI method = cpi.MemberConstantPoolItem as ClassFile.ConstantPoolItemMI;
-		if (method != null)
-		{
-			if (method.GetRetType().IsUnloadable)
-			{
-				return method.GetRetType();
-			}
-			foreach (TypeWrapper tw in method.GetArgTypes())
-			{
-				if (tw.IsUnloadable)
-				{
-					return tw;
-				}
-			}
-		}
-		else if (((ClassFile.ConstantPoolItemFieldref)cpi.MemberConstantPoolItem).GetFieldType().IsUnloadable)
-		{
-			return ((ClassFile.ConstantPoolItemFieldref)cpi.MemberConstantPoolItem).GetFieldType();
-		}
-		return null;
-	}
-
 	private void PatchLdcMethodHandle(ref ClassFile.Method.Instruction instr)
 	{
 		ClassFile.ConstantPoolItemMethodHandle cpi = classFile.GetConstantPoolConstantMethodHandle(instr.Arg1);
-		TypeWrapper twUnloadable;
-		if ((twUnloadable = FirstUnloadable(cpi)) != null)
+		if (cpi.GetClassType().IsUnloadable)
 		{
-			SetHardError(wrapper.GetClassLoader(), ref instr, HardError.NoClassDefFoundError, "{0}", twUnloadable.Name);
+			ConditionalPatchNoClassDefFoundError(ref instr, cpi.GetClassType());
 		}
 		else if (!cpi.GetClassType().IsAccessibleFrom(wrapper))
 		{
@@ -3501,6 +3466,15 @@ sealed class MethodAnalyzer
 		}
 	}
 
+	private void ConditionalPatchNoClassDefFoundError(ref ClassFile.Method.Instruction instruction, TypeWrapper tw)
+	{
+		ClassLoaderWrapper loader = wrapper.GetClassLoader();
+		if (loader.DisableDynamicBinding)
+		{
+			SetHardError(loader, ref instruction, HardError.NoClassDefFoundError, "{0}", tw.Name);
+		}
+	}
+
 	private void SetHardError(ClassLoaderWrapper classLoader, ref ClassFile.Method.Instruction instruction, HardError hardError, string message, params object[] args)
 	{
 		string text = string.Format(message, args);
@@ -3583,40 +3557,47 @@ sealed class MethodAnalyzer
 			}
 		}
 
-		if(cpi.GetClassType().IsUnloadable || (thisType != null && thisType.IsUnloadable))
+		if(cpi.GetClassType().IsUnloadable)
 		{
-#if STATIC_COMPILER
-			SetHardError(wrapper.GetClassLoader(), ref instr, HardError.NoClassDefFoundError, "{0}", cpi.GetClassType().Name);
-#else
-			switch(invoke)
+			if(wrapper.GetClassLoader().DisableDynamicBinding)
 			{
-				case NormalizedByteCode.__invokeinterface:
-					instr.PatchOpCode(NormalizedByteCode.__dynamic_invokeinterface);
-					break;
-				case NormalizedByteCode.__invokestatic:
-					instr.PatchOpCode(NormalizedByteCode.__dynamic_invokestatic);
-					break;
-				case NormalizedByteCode.__invokevirtual:
-					instr.PatchOpCode(NormalizedByteCode.__dynamic_invokevirtual);
-					break;
-				case NormalizedByteCode.__invokespecial:
-					if(isnew)
-					{
-						instr.PatchOpCode(NormalizedByteCode.__dynamic_invokespecial);
-					}
-					else
-					{
-						SetHardError(wrapper.GetClassLoader(), ref instr, HardError.LinkageError, "Base class no longer loadable");
-					}
-					break;
-				default:
-					throw new InvalidOperationException();
+				SetHardError(wrapper.GetClassLoader(), ref instr, HardError.NoClassDefFoundError, "{0}", cpi.GetClassType().Name);
 			}
-#endif
+			else
+			{
+				switch(invoke)
+				{
+					case NormalizedByteCode.__invokeinterface:
+						instr.PatchOpCode(NormalizedByteCode.__dynamic_invokeinterface);
+						break;
+					case NormalizedByteCode.__invokestatic:
+						instr.PatchOpCode(NormalizedByteCode.__dynamic_invokestatic);
+						break;
+					case NormalizedByteCode.__invokevirtual:
+						instr.PatchOpCode(NormalizedByteCode.__dynamic_invokevirtual);
+						break;
+					case NormalizedByteCode.__invokespecial:
+						if(isnew)
+						{
+							instr.PatchOpCode(NormalizedByteCode.__dynamic_invokespecial);
+						}
+						else
+						{
+							throw new VerifyError("Invokespecial cannot call subclass methods");
+						}
+						break;
+					default:
+						throw new InvalidOperationException();
+				}
+			}
 		}
-		else if(cpi.GetClassType().IsInterface != (invoke == NormalizedByteCode.__invokeinterface))
+		else if(invoke == NormalizedByteCode.__invokeinterface && !cpi.GetClassType().IsInterface)
 		{
 			SetHardError(wrapper.GetClassLoader(), ref instr, HardError.IncompatibleClassChangeError, "invokeinterface on non-interface");
+		}
+		else if(cpi.GetClassType().IsInterface && invoke != NormalizedByteCode.__invokeinterface && (invoke != NormalizedByteCode.__invokestatic || classFile.MajorVersion < 52))
+		{
+			SetHardError(wrapper.GetClassLoader(), ref instr, HardError.IncompatibleClassChangeError, "interface method must be invoked used invokeinterface or invokestatic");
 		}
 		else
 		{
@@ -3630,7 +3611,7 @@ sealed class MethodAnalyzer
 				}
 				else if(targetMethod.IsStatic == (invoke == NormalizedByteCode.__invokestatic))
 				{
-					if(targetMethod.IsAbstract && invoke == NormalizedByteCode.__invokespecial)
+					if(targetMethod.IsAbstract && invoke == NormalizedByteCode.__invokespecial && (targetMethod.GetMethod() == null || targetMethod.GetMethod().IsAbstract))
 					{
 						SetHardError(wrapper.GetClassLoader(), ref instr, HardError.AbstractMethodError, "{0}.{1}{2}", cpi.Class, cpi.Name, cpi.Signature);
 					}
@@ -3748,29 +3729,32 @@ sealed class MethodAnalyzer
 			// We're being called from IsSideEffectFreeStaticInitializer,
 			// no further checks are possible (nor needed).
 		}
-		else if(cpi.GetClassType().IsUnloadable || (thisType != null && thisType.IsUnloadable))
+		else if(cpi.GetClassType().IsUnloadable)
 		{
-#if STATIC_COMPILER
-			SetHardError(wrapper.GetClassLoader(), ref instr, HardError.NoClassDefFoundError, "{0}", cpi.GetClassType().Name);
-#else
-			switch(instr.NormalizedOpCode)
+			if(wrapper.GetClassLoader().DisableDynamicBinding)
 			{
-				case NormalizedByteCode.__getstatic:
-					instr.PatchOpCode(NormalizedByteCode.__dynamic_getstatic);
-					break;
-				case NormalizedByteCode.__putstatic:
-					instr.PatchOpCode(NormalizedByteCode.__dynamic_putstatic);
-					break;
-				case NormalizedByteCode.__getfield:
-					instr.PatchOpCode(NormalizedByteCode.__dynamic_getfield);
-					break;
-				case NormalizedByteCode.__putfield:
-					instr.PatchOpCode(NormalizedByteCode.__dynamic_putfield);
-					break;
-				default:
-					throw new InvalidOperationException();
+				SetHardError(wrapper.GetClassLoader(), ref instr, HardError.NoClassDefFoundError, "{0}", cpi.GetClassType().Name);
 			}
-#endif
+			else
+			{
+				switch(instr.NormalizedOpCode)
+				{
+					case NormalizedByteCode.__getstatic:
+						instr.PatchOpCode(NormalizedByteCode.__dynamic_getstatic);
+						break;
+					case NormalizedByteCode.__putstatic:
+						instr.PatchOpCode(NormalizedByteCode.__dynamic_putstatic);
+						break;
+					case NormalizedByteCode.__getfield:
+						instr.PatchOpCode(NormalizedByteCode.__dynamic_getfield);
+						break;
+					case NormalizedByteCode.__putfield:
+						instr.PatchOpCode(NormalizedByteCode.__dynamic_putfield);
+						break;
+					default:
+						throw new InvalidOperationException();
+				}
+			}
 			return;
 		}
 		else

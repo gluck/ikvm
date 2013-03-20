@@ -1,5 +1,5 @@
 /*
-  Copyright (C) 2006, 2007, 2010 Jeroen Frijters
+  Copyright (C) 2006-2013 Jeroen Frijters
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -37,61 +37,52 @@ import java.util.jar.Manifest;
 
 public final class AssemblyClassLoader extends ClassLoader
 {
-    // NOTE assembly is null for "generics" class loader instances
-    private final Assembly assembly;
     private boolean packagesDefined;
 
+    // This constructor is used to manually construct an AssemblyClassLoader that is used
+    // as a delegation parent for custom assembly class loaders.
+    //
+    // In that case the class loader object graph looks like this:
+    //
+    //            +---------------------------------+
+    //            |IKVM.Internal.AssemblyClassLoader|
+    //            +---------------------------------+
+    //              ||     /\                  /\
+    //              \/     ||                  ||
+    //    +-------------------+                ||
+    //    |Custom Class Loader|      +--------------------------------+
+    //    +-------------------+      |ikvm.runtime.AssemblyClassLoader|
+    //                               +--------------------------------+
+    //
     public AssemblyClassLoader(Assembly assembly)
     {
-        this(assembly, System.getSecurityManager());
+        super(null);
+        setWrapper(assembly);
     }
 
-    // this constructor is used by the runtime to avoid the security check (by passing in null as the security manager)    
-    AssemblyClassLoader(Assembly assembly, SecurityManager security)
+    private native void setWrapper(Assembly assembly);
+
+    // this constructor is used by the runtime and calls a privileged
+    // ClassLoader constructor to avoid the security check
+    AssemblyClassLoader()
     {
-        super(null, security);
-        this.assembly = assembly;
+        super(null, null);
     }
 
-    protected Class loadClass(String name, boolean resolve) throws ClassNotFoundException
-    {
-        return LoadClass(this, assembly, name);
-    }
+    @Override
+    protected native Class loadClass(String name, boolean resolve) throws ClassNotFoundException;
 
-    private static native Class LoadClass(ClassLoader classLoader, Assembly assembly, String name) throws ClassNotFoundException;
+    @Override
+    public native URL getResource(String name);
 
-    public URL getResource(String name)
-    {
-        return getResource(this, assembly, name);
-    }
+    @Override
+    public native Enumeration<URL> getResources(String name) throws IOException;
 
-    public Enumeration getResources(String name) throws IOException
-    {
-        return getResources(this, assembly, name);
-    }
+    @Override
+    protected native URL findResource(String name);
 
-    protected URL findResource(String name)
-    {
-        return getResource(this, assembly, name);
-    }
-
-    protected Enumeration findResources(String name) throws IOException
-    {
-        return getResources(this, assembly, name);
-    }
-
-    @Internal
-    public static native URL getResource(ClassLoader classLoader, Assembly assembly, String name);
-    
-    @Internal
-    public static native Enumeration getResources(ClassLoader classLoader, Assembly assembly, String name) throws IOException;
-
-    private static native String GetGenericClassLoaderName(Object classLoader);
-    // also used by java.lang.LangHelper
-    @Internal
-    public static native String[] GetPackages(Assembly assembly);
-
-    private static native URL GetManifest(Assembly assembly);
+    @Override
+    protected native Enumeration<URL> findResources(String name) throws IOException;
 
     private synchronized void lazyDefinePackagesCheck()
     {
@@ -102,119 +93,65 @@ public final class AssemblyClassLoader extends ClassLoader
         }
     }
 
-    private static String getAttributeValue(Attributes.Name name, Attributes first, Attributes second)
-    {
-        String result = null;
-        if(first != null)
-        {
-            result = first.getValue(name);
-        }
-        if(second != null && result == null)
-        {
-            result = second.getValue(name);
-        }
-        return result;
-    }
+    private native void lazyDefinePackages();
 
-    private Manifest getManifest()
-    {
-        try
-        {
-            if(assembly != null)
-            {
-                URL url = GetManifest(assembly);
-                if (url != null)
-                {
-                    return new Manifest(url.openStream());
-                }
-            }
-        }
-        catch (MalformedURLException _)
-        {
-        }
-        catch (IOException _)
-        {
-        }
-        return null;
-    }
-
-    private void lazyDefinePackages()
-    {
-	if(assembly == null)
-	{
-	    // generic class loader (doesn't support packages)
-	    return;
-	}
-        URL sealBase = getCodeBase();
-        Manifest manifest = getManifest();
-        Attributes attr = null;
-        if(manifest != null)
-        {
-            attr = manifest.getMainAttributes();
-        }
-        String[] packages = GetPackages(assembly);
-        for(int i = 0; i < packages.length; i++)
-        {
-            String name = packages[i];
-            if(super.getPackage(name) == null)
-            {
-                Attributes entryAttr = null;
-                if(manifest != null)
-                {
-                    entryAttr = manifest.getAttributes(name.replace('.', '/') + '/');
-                }
-                definePackage(name,
-                    getAttributeValue(Attributes.Name.SPECIFICATION_TITLE, entryAttr, attr),
-                    getAttributeValue(Attributes.Name.SPECIFICATION_VERSION, entryAttr, attr),
-                    getAttributeValue(Attributes.Name.SPECIFICATION_VENDOR, entryAttr, attr),
-                    getAttributeValue(Attributes.Name.IMPLEMENTATION_TITLE, entryAttr, attr),
-                    getAttributeValue(Attributes.Name.IMPLEMENTATION_VERSION, entryAttr, attr),
-                    getAttributeValue(Attributes.Name.IMPLEMENTATION_VENDOR, entryAttr, attr),
-                    "true".equalsIgnoreCase(getAttributeValue(Attributes.Name.SEALED, entryAttr, attr)) ? sealBase : null);
-            }
-        }
-    }
-
+    @Override
     protected Package getPackage(String name)
     {
         lazyDefinePackagesCheck();
         return super.getPackage(name);
     }
 
+    @Override
     protected Package[] getPackages()
     {
         lazyDefinePackagesCheck();
         return super.getPackages();
     }
 
-    public String toString()
-    {
-        if(assembly != null)
-        {
-            return assembly.get_FullName();
-        }
-        return GetGenericClassLoaderName(this);
-    }
+    @Override
+    public native String toString();
 
-    private URL getCodeBase()
-    {
-        try
-        {
-            if(assembly != null)
-            {
-                if(false) throw new cli.System.NotSupportedException();
-                return new URL(assembly.get_CodeBase());
-            }
-        }
-        catch(cli.System.NotSupportedException _)
-        {
-        }
-        catch(MalformedURLException _)
-        {
-        }
-        return null;
-    }
-    
     // return the ClassLoader for the assembly. Note that this doesn't have to be an AssemblyClassLoader.
     public static native ClassLoader getAssemblyClassLoader(Assembly asm);
+}
+
+final class GenericClassLoader extends ClassLoader
+{
+    // this constructor avoids the security check in ClassLoader by passing in null as the security manager
+    // to the IKVM specific constructor in ClassLoader
+    GenericClassLoader()
+    {
+        super(null, null);
+    }
+
+    @Override
+    public native String toString();
+
+    @Override
+    public URL getResource(String name)
+    {
+        Enumeration<URL> e = getResources(name);
+        return e.hasMoreElements()
+            ? e.nextElement()
+            : null;
+    }
+
+    @Override
+    public native Enumeration<URL> getResources(String name);
+
+    @Override
+    protected native URL findResource(String name);
+
+    @Override
+    protected Enumeration<URL> findResources(String name)
+    {
+        Vector<URL> v = new Vector<URL>();
+        URL url = findResource(name);
+        if (url != null)
+        {
+            v.add(url);
+        }
+        return v.elements();
+    }
 }

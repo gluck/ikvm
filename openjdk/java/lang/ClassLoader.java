@@ -286,7 +286,10 @@ public abstract class ClassLoader {
         return null;
     }
 
-    private ClassLoader(Void unused, ClassLoader parent) {
+    // [IKVM] this normally private constructor is also used by ikvm.runtime.AssemblyClassLoader
+    // to construct an assembly class loader without doing a security check
+    @ikvm.lang.Internal
+    protected ClassLoader(Void unused, ClassLoader parent) {
         if (parent != null) {
             parent.check();
         }
@@ -328,20 +331,6 @@ public abstract class ClassLoader {
      */
     protected ClassLoader(ClassLoader parent) {
         this(checkCreateClassLoader(), parent);
-    }
-
-    // private constructor for use by ikvm.runtime.AssemblyClassLoader
-    // (to skip the security manager check)
-    @ikvm.lang.Internal
-    protected ClassLoader(ClassLoader parent, SecurityManager security) {
-        this(checkCreateAssemblyClassLoader(security), parent);
-    }
-    
-    private static Void checkCreateAssemblyClassLoader(SecurityManager security) {
-        if (security != null) {
-            security.checkCreateClassLoader();
-        }
-        return null;
     }
 
     /**
@@ -505,7 +494,7 @@ public abstract class ClassLoader {
     }
 
     // Invoked by the VM after loading class with this loader.
-    private void checkPackageAccess(Class cls, ProtectionDomain pd) {
+    final void checkPackageAccess(Class cls, ProtectionDomain pd) {
         final SecurityManager sm = System.getSecurityManager();
         if (sm != null) {
             final String name = cls.getName();
@@ -935,7 +924,7 @@ public abstract class ClassLoader {
                                       String source);
 
     // true if the name is null or has the potential to be a valid binary name
-    private boolean checkName(String name) {
+    static boolean checkName(String name) {
         if ((name == null) || (name.length() == 0))
             return true;
         if ((name.indexOf('/') != -1)
@@ -1326,29 +1315,13 @@ public abstract class ClassLoader {
     /**
      * Find resources from the VM's built-in classloader.
      */
-    private static URL getBootstrapResource(String name) {
-        URLClassPath ucp = getBootstrapClassPath();
-        Resource res = ucp.getResource(name);
-        return res != null ? res.getURL() : null;
-    }
+    private static native URL getBootstrapResource(String name);
 
     /**
      * Find resources from the VM's built-in classloader.
      */
-    private static Enumeration<URL> getBootstrapResources(String name)
-        throws IOException
-    {
-        final Enumeration<Resource> e =
-            getBootstrapClassPath().getResources(name);
-        return new Enumeration<URL> () {
-            public URL nextElement() {
-                return e.nextElement().getURL();
-            }
-            public boolean hasMoreElements() {
-                return e.hasMoreElements();
-            }
-        };
-    }
+    private static native Enumeration<URL> getBootstrapResources(String name)
+        throws IOException;
 
     // Returns the URLClassPath that is used for finding system resources.
     static URLClassPath getBootstrapClassPath() {

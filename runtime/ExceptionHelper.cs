@@ -1,5 +1,5 @@
 /*
-  Copyright (C) 2002-2011 Jeroen Frijters
+  Copyright (C) 2002-2013 Jeroen Frijters
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -294,6 +294,10 @@ namespace IKVM.Internal
 			{
 				return "<clinit>";
 			}
+			else if(mb.Name.StartsWith(NamePrefix.DefaultMethod, StringComparison.Ordinal))
+			{
+				return mb.Name.Substring(NamePrefix.DefaultMethod.Length);
+			}
 			else
 			{
 				return mb.Name;
@@ -305,7 +309,7 @@ namespace IKVM.Internal
 #if FIRST_PASS
 			return false;
 #else
-			return NativeCode.sun.reflect.Reflection.IsHideFromJava(mb) || (mb.DeclaringType == typeof(ikvm.runtime.Util) && mb.Name == "mapException");
+			return Java_sun_reflect_Reflection.IsHideFromJava(mb) || (mb.DeclaringType == typeof(ikvm.runtime.Util) && mb.Name == "mapException");
 #endif
 		}
 

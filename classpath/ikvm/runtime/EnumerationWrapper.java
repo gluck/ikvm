@@ -1,5 +1,5 @@
 /*
-  Copyright (C) 2006-2013 Jeroen Frijters
+  Copyright (C) 2013 Jeroen Frijters
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -21,20 +21,35 @@
   jeroen@frijters.net
   
 */
+package ikvm.runtime;
 
-@cli.System.Reflection.AssemblyCopyrightAttribute.Annotation(
-    "This software is licensed under the GNU General Public License version 2 + \"Classpath\" exception.\r\n" +
-    "See http://www.gnu.org/software/classpath/license.html for details.\r\n" +
-@COPYRIGHT@)
+import cli.System.Collections.IEnumerable;
+import cli.System.Collections.IEnumerator;
+import java.util.Enumeration;
+import java.util.NoSuchElementException;
 
-@cli.System.Reflection.AssemblyTitleAttribute.Annotation("IKVM.NET OpenJDK Library for .NET")
-@cli.System.Reflection.AssemblyProductAttribute.Annotation("IKVM.NET")
-@cli.System.Reflection.AssemblyCompanyAttribute.Annotation("Jeroen Frijters")
-@cli.System.Reflection.AssemblyInformationalVersionAttribute.Annotation("@VERSION@")
+public final class EnumerationWrapper<T> implements Enumeration<T>
+{
+    private final IEnumerator enumerator;
+    private boolean next;
 
-@cli.System.Runtime.CompilerServices.InternalsVisibleToAttribute.Annotation("@RUNTIME@")
+    public EnumerationWrapper(IEnumerable enumerable)
+    {
+        this.enumerator = enumerable.GetEnumerator();
+        next = enumerator.MoveNext();
+    }
 
-@cli.System.Security.AllowPartiallyTrustedCallersAttribute.Annotation
+    public boolean hasMoreElements()
+    {
+        return next;
+    }
 
-// magic type to collect Assembly attributes
-interface assembly {}
+    public T nextElement()
+    {
+        if (!next)
+            throw new NoSuchElementException();
+        Object value = enumerator.get_Current();
+        next = enumerator.MoveNext();
+        return (T)value;
+    }
+}

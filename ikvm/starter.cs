@@ -1,5 +1,5 @@
 /*
-  Copyright (C) 2002-2011 Jeroen Frijters
+  Copyright (C) 2002-2013 Jeroen Frijters
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -22,18 +22,12 @@
   
 */
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using IKVM.Internal;
-
 using ikvm.runtime;
 using java.lang.reflect;
-using java.net;
-using java.util.jar;
-using java.io;
-
-using Console = System.Console;
-using System.Diagnostics;
 
 public class Starter
 {
@@ -66,11 +60,9 @@ public class Starter
 		public override void run()
 		{
 			System.Threading.Thread.CurrentThread.Priority = System.Threading.ThreadPriority.AboveNormal;
-			Console.Error.WriteLine("Saving dynamic assembly...");
 			try
 			{
 				IKVM.Internal.Starter.SaveDebugImage();
-				Console.Error.WriteLine("Saving done.");
 			}
 			catch(Exception x)
 			{
@@ -259,11 +251,15 @@ public class Starter
                 }
                 else if (arg.StartsWith("-Xreference:"))
                 {
-                    Startup.addBootClassPathAssemby(Assembly.LoadFrom(arg.Substring(12)));
+                    Startup.addBootClassPathAssembly(Assembly.LoadFrom(arg.Substring(12)));
                 }
                 else if (arg == "-Xnoglobbing")
                 {
                     noglobbing = true;
+                }
+                else if (arg == "-XX:+AllowNonVirtualCalls")
+                {
+                    IKVM.Internal.Starter.AllowNonVirtualCalls = true;
                 }
                 else if (arg.StartsWith("-Xms")
                     || arg.StartsWith("-Xmx")
@@ -374,47 +370,29 @@ public class Starter
 				// Startup.glob() uses Java code, so we need to do this after we've initialized
 				vmargs = Startup.glob(args, vmargsIndex);
 			}
-			if (jar)
-			{
-				mainClass = GetMainClassFromJarManifest(mainClass);
-				if (mainClass == null)
-				{
-					return 1;
-				}
-			}
-			java.lang.Class clazz = java.lang.Class.forName(mainClass, true, java.lang.ClassLoader.getSystemClassLoader());
 			try
 			{
-				Method method = IKVM.Internal.Starter.FindMainMethod(clazz);
-				if(method == null)
+				java.lang.Class clazz = sun.launcher.LauncherHelper.checkAndLoadMain(true, jar ? 2 : 1, mainClass);
+				// we don't need to do any checking on the main method, as that was already done by checkAndLoadMain
+				Method method = clazz.getMethod("main", typeof(string[]));
+				// if clazz isn't public, we can still call main
+				method.setAccessible(true);
+				if(saveAssembly)
 				{
-					throw new java.lang.NoSuchMethodError("main");
+					java.lang.Runtime.getRuntime().addShutdownHook(new SaveAssemblyShutdownHook(clazz));
 				}
-				else if(!Modifier.isPublic(method.getModifiers()))
+				if(waitOnExit)
 				{
-					Console.Error.WriteLine("Main method not public.");
+					java.lang.Runtime.getRuntime().addShutdownHook(new WaitShutdownHook());
 				}
-				else
+				try
 				{
-					// if clazz isn't public, we can still call main
-					method.setAccessible(true);
-					if(saveAssembly)
-					{
-						java.lang.Runtime.getRuntime().addShutdownHook(new SaveAssemblyShutdownHook(clazz));
-					}
-					if(waitOnExit)
-					{
-						java.lang.Runtime.getRuntime().addShutdownHook(new WaitShutdownHook());
-					}
-					try
-					{
-						method.invoke(null, new object[] { vmargs });
-						return 0;
-					}
-					catch(InvocationTargetException x)
-					{
-						throw x.getCause();
-					}
+					method.invoke(null, new object[] { vmargs });
+					return 0;
+				}
+				catch(InvocationTargetException x)
+				{
+					throw x.getCause();
 				}
 			}
 			finally
@@ -435,30 +413,5 @@ public class Starter
 			Startup.exitMainThread();
 		}
 		return 1;
-	}
-
-	private static string GetMainClassFromJarManifest(string mainClass)
-	{
-		JarFile jf = new JarFile(mainClass);
-		try
-		{
-			Manifest manifest = jf.getManifest();
-			if (manifest == null)
-			{
-				Console.Error.WriteLine("Jar file doesn't contain manifest");
-				return null;
-			}
-			mainClass = manifest.getMainAttributes().getValue(Attributes.Name.MAIN_CLASS);
-		}
-		finally
-		{
-			jf.close();
-		}
-		if (mainClass == null)
-		{
-			Console.Error.WriteLine("Manifest doesn't contain a Main-Class.");
-			return null;
-		}
-		return mainClass.Replace('/', '.');
 	}
 }

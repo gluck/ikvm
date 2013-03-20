@@ -65,8 +65,7 @@ namespace IKVM.Internal
 		private const ushort FLAG_MASK_MAJORVERSION = 0xFF;
 		private const ushort FLAG_MASK_DEPRECATED = 0x100;
 		private const ushort FLAG_MASK_INTERNAL = 0x200;
-		private const ushort FLAG_MASK_EFFECTIVELY_FINAL = 0x400;
-		private const ushort FLAG_HAS_CALLERID = 0x800;
+		private const ushort FLAG_HAS_CALLERID = 0x400;
 		private ConstantPoolItemClass[] interfaces;
 		private Field[] fields;
 		private Method[] methods;
@@ -1211,19 +1210,6 @@ namespace IKVM.Internal
 			flags |= FLAG_MASK_INTERNAL;
 		}
 
-		internal void SetEffectivelyFinal()
-		{
-			flags |= FLAG_MASK_EFFECTIVELY_FINAL;
-		}
-
-		internal bool IsEffectivelyFinal
-		{
-			get
-			{
-				return (flags & FLAG_MASK_EFFECTIVELY_FINAL) != 0;
-			}
-		}
-
 		internal bool HasInitializedFields
 		{
 			get
@@ -1429,7 +1415,21 @@ namespace IKVM.Internal
 			{
 				if(typeWrapper == VerifierTypeWrapper.Null)
 				{
-					typeWrapper = ClassLoaderWrapper.LoadClassNoThrow(thisType.GetClassLoader(), name);
+					TypeWrapper tw = ClassLoaderWrapper.LoadClassNoThrow(thisType.GetClassLoader(), name);
+#if !STATIC_COMPILER && !FIRST_PASS
+					if(!tw.IsUnloadable)
+					{
+						try
+						{
+							thisType.GetClassLoader().CheckPackageAccess(tw, thisType.ClassObject.pd);
+						}
+						catch(java.lang.SecurityException)
+						{
+							tw = new UnloadableTypeWrapper(name);
+						}
+					}
+#endif
+					typeWrapper = tw;
 				}
 			}
 
@@ -1727,9 +1727,11 @@ namespace IKVM.Internal
 					{
 						method.Link();
 					}
-					if(Name != StringConstants.INIT && 
-						(thisType.Modifiers & (Modifiers.Interface | Modifiers.Super)) == Modifiers.Super &&
-						thisType != wrapper && thisType.IsSubTypeOf(wrapper))
+					if(Name != StringConstants.INIT
+						&& !thisType.IsInterface
+						&& (!JVM.AllowNonVirtualCalls || (thisType.Modifiers & Modifiers.Super) == Modifiers.Super)
+						&& thisType != wrapper
+						&& thisType.IsSubTypeOf(wrapper))
 					{
 						invokespecialMethod = thisType.BaseTypeWrapper.GetMethodWrapper(Name, Signature, true);
 						if(invokespecialMethod != null)
@@ -1749,6 +1751,10 @@ namespace IKVM.Internal
 
 			private static MethodWrapper GetInterfaceMethod(TypeWrapper wrapper, string name, string sig)
 			{
+				if(wrapper.IsUnloadable)
+				{
+					return null;
+				}
 				MethodWrapper method = wrapper.GetMethodWrapper(name, sig, false);
 				if(method != null)
 				{
@@ -1770,7 +1776,7 @@ namespace IKVM.Internal
 			{
 				base.Link(thisType);
 				TypeWrapper wrapper = GetClassType();
-				if(wrapper != null && !wrapper.IsUnloadable)
+				if(wrapper != null)
 				{
 					method = GetInterfaceMethod(wrapper, Name, Signature);
 					if(method == null)
@@ -2011,6 +2017,11 @@ namespace IKVM.Internal
 						retTypeWrapper = ret;
 					}
 				}
+			}
+
+			internal string Signature
+			{
+				get { return descriptor; }
 			}
 
 			internal TypeWrapper[] GetArgTypes()
@@ -2568,9 +2579,9 @@ namespace IKVM.Internal
 					if((ReferenceEquals(Name, StringConstants.INIT) && (IsStatic || IsSynchronized || IsFinal || IsAbstract || IsNative))
 						|| (IsPrivate && IsPublic) || (IsPrivate && IsProtected) || (IsPublic && IsProtected)
 						|| (IsAbstract && (IsFinal || IsNative || IsPrivate || IsStatic || IsSynchronized))
-						|| (classFile.IsInterface && (!IsPublic || !IsAbstract)))
+						|| (classFile.IsInterface && (!IsPublic || IsFinal || IsNative || IsSynchronized || (!IsAbstract && classFile.MajorVersion < 52))))
 					{
-						throw new ClassFormatError("{0} (Illegal method modifiers: 0x{1:X})", classFile.Name, access_flags);
+						throw new ClassFormatError("Method {0} in class {1} has illegal modifiers: 0x{2:X}", Name, classFile.Name, (int)access_flags);
 					}
 				}
 				int attributes_count = br.ReadUInt16();
