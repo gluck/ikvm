@@ -1282,6 +1282,7 @@ namespace IKVM.Internal
 	{
 		// note that MangleNestedTypeName() assumes that there are less than 16 special characters
 		private const string specialCharactersString = "\\+,[]*&\u0000";
+		internal const string ProxiesContainer = "__<Proxies>";
 
 		internal static string ReplaceIllegalCharacters(string name)
 		{
@@ -1373,6 +1374,41 @@ namespace IKVM.Internal
 				}
 			}
 			return sb.ToString();
+		}
+
+		internal static string GetProxyNestedName(TypeWrapper[] interfaces)
+		{
+			System.Text.StringBuilder sb = new System.Text.StringBuilder();
+			foreach (TypeWrapper tw in interfaces)
+			{
+				sb.Append(tw.Name.Length).Append('|').Append(tw.Name);
+			}
+			return TypeNameUtil.MangleNestedTypeName(sb.ToString());
+		}
+
+		internal static string GetProxyName(TypeWrapper[] interfaces)
+		{
+			return ProxiesContainer + "+" + GetProxyNestedName(interfaces);
+		}
+	}
+
+	static class ArrayUtil
+	{
+		internal static T[] Concat<T, X>(X obj, T[] arr)
+			where X : T
+		{
+			T[] narr = new T[arr.Length + 1];
+			narr[0] = obj;
+			Array.Copy(arr, 0, narr, 1, arr.Length);
+			return narr;
+		}
+
+		internal static T[] Concat<T, X>(T[] arr, X obj)
+			where X : T
+		{
+			Array.Resize(ref arr, arr.Length + 1);
+			arr[arr.Length - 1] = obj;
+			return arr;
 		}
 	}
 
@@ -1715,7 +1751,7 @@ namespace IKVM.Internal
 			this.name = name == null ? null : String.Intern(name);
 		}
 
-#if !STUB_GENERATOR
+#if EMITTERS
 		internal void EmitClassLiteral(CodeEmitter ilgen)
 		{
 			Debug.Assert(!this.IsPrimitive);
@@ -1748,7 +1784,7 @@ namespace IKVM.Internal
 				ilgen.Emit(OpCodes.Ldsfld, RuntimeHelperTypes.GetClassLiteralField(type));
 			}
 		}
-#endif // !STUB_GENERATOR
+#endif // EMITTERS
 
 		private Type GetClassLiteralType()
 		{
@@ -1858,7 +1894,7 @@ namespace IKVM.Internal
 				if (classObject == null)
 				{
 					// DynamicTypeWrapper should haved already had SetClassObject explicitly
-					Debug.Assert(!(this is DynamicTypeWrapper));
+					Debug.Assert(!IsDynamic);
 #if !FIRST_PASS
 					java.lang.Class clazz;
 					// note that this has to be the same check as in EmitClassLiteral
@@ -2851,7 +2887,7 @@ namespace IKVM.Internal
 		}
 #endif
 
-#if !STUB_GENERATOR
+#if EMITTERS
 		internal void EmitUnbox(CodeEmitter ilgen)
 		{
 			Debug.Assert(this.IsNonPrimitiveValueType);
@@ -2986,7 +3022,7 @@ namespace IKVM.Internal
 				ilgen.Emit_instanceof(TypeAsTBD);
 			}
 		}
-#endif // !STUB_GENERATOR
+#endif // EMITTERS
 
 		// NOTE don't call this method, call MethodWrapper.Link instead
 		internal virtual MethodBase LinkMethod(MethodWrapper mw)
@@ -3000,11 +3036,11 @@ namespace IKVM.Internal
 			return fw.GetField();
 		}
 
-#if !STUB_GENERATOR
+#if EMITTERS
 		internal virtual void EmitRunClassConstructor(CodeEmitter ilgen)
 		{
 		}
-#endif // !STUB_GENERATOR
+#endif // EMITTERS
 
 		internal virtual string GetGenericSignature()
 		{
@@ -3146,8 +3182,7 @@ namespace IKVM.Internal
 					interfaces[i] = tw;
 					if (Array.IndexOf(interfaces, twRemapped) == -1)
 					{
-						Array.Resize(ref interfaces, interfaces.Length + 1);
-						interfaces[interfaces.Length - 1] = twRemapped;
+						interfaces = ArrayUtil.Concat(interfaces, twRemapped);
 					}
 				}
 			}
@@ -3174,7 +3209,6 @@ namespace IKVM.Internal
 		// return the constructor used for automagic .NET serialization
 		internal virtual MethodBase GetSerializationConstructor()
 		{
-			Debug.Assert(!(this is DynamicTypeWrapper));
 			return this.TypeAsBaseType.GetConstructor(BindingFlags.NonPublic | BindingFlags.Instance, null, new Type[] {
 						JVM.Import(typeof(System.Runtime.Serialization.SerializationInfo)), JVM.Import(typeof(System.Runtime.Serialization.StreamingContext)) }, null);
 		}
@@ -3184,6 +3218,27 @@ namespace IKVM.Internal
 			return BaseTypeWrapper.GetSerializationConstructor();
 		}
 #endif
+
+#if !STATIC_COMPILER && !STUB_GENERATOR
+		internal virtual object GhostWrap(object obj)
+		{
+			return obj;
+		}
+
+		internal virtual object GhostUnwrap(object obj)
+		{
+			return obj;
+		}
+#endif
+
+		internal bool IsDynamic
+		{
+#if STUB_GENERATOR
+			get { return false; }
+#else
+			get { return this is DynamicTypeWrapper; }
+#endif
+		}
 	}
 
 	sealed class UnloadableTypeWrapper : TypeWrapper
@@ -3299,7 +3354,7 @@ namespace IKVM.Internal
 			this.customModifier = type;
 		}
 
-#if !STUB_GENERATOR
+#if EMITTERS
 		internal Type GetCustomModifier(TypeWrapperFactory context)
 		{
 			// we don't need to lock, because we're only supposed to be called while holding the finish lock
@@ -3315,7 +3370,7 @@ namespace IKVM.Internal
 		{
 			throw new InvalidOperationException("EmitInstanceOf called on UnloadableTypeWrapper: " + Name);
 		}
-#endif // !STUB_GENERATOR
+#endif // EMITTERS
 	}
 
 	sealed class PrimitiveTypeWrapper : TypeWrapper
@@ -3611,6 +3666,18 @@ namespace IKVM.Internal
 					return true;
 				}
 			}
+
+#if !STATIC_COMPILER && !STUB_GENERATOR && !FIRST_PASS
+			internal override object GhostWrap(object obj)
+			{
+				return type.GetMethod("Cast").Invoke(null, new object[] { obj });
+			}
+
+			internal override object GhostUnwrap(object obj)
+			{
+				return type.GetMethod("ToObject").Invoke(obj, new object[0]);
+			}
+#endif
 		}
 
 		internal static string GetName(Type type)
@@ -4092,14 +4159,14 @@ namespace IKVM.Internal
 				invoke = (MethodInfo)mw.GetMethod();
 			}
 
-#if !STUB_GENERATOR
+#if EMITTERS
 			internal override void EmitNewobj(CodeEmitter ilgen)
 			{
 				ilgen.Emit(OpCodes.Dup);
 				ilgen.Emit(OpCodes.Ldvirtftn, invoke);
 				ilgen.Emit(OpCodes.Newobj, constructor);
 			}
-#endif // !STUB_GENERATOR
+#endif // EMITTERS
 		}
 
 		protected override void LazyPublishMethods()
@@ -4348,7 +4415,7 @@ namespace IKVM.Internal
 #endif
 			}
 
-#if !STUB_GENERATOR
+#if EMITTERS
 			protected override void CallImpl(CodeEmitter ilgen)
 			{
 				MethodBase mb = GetMethod();
@@ -4401,33 +4468,51 @@ namespace IKVM.Internal
 					ilgen.Emit(OpCodes.Newobj, mb);
 				}
 			}
-#endif // !STUB_GENERATOR
+#endif // EMITTERS
 
 #if !STATIC_COMPILER && !FIRST_PASS && !STUB_GENERATOR
 			[HideFromJava]
-			protected override object InvokeNonvirtualRemapped(object obj, object[] args)
+			internal override object Invoke(object obj, object[] args)
 			{
-				Type[] p1 = GetParametersForDefineMethod();
-				Type[] argTypes = new Type[p1.Length + 1];
-				p1.CopyTo(argTypes, 1);
-				argTypes[0] = this.DeclaringType.TypeAsSignatureType;
+				MethodBase mb = mbHelper != null ? mbHelper : GetMethod();
+				if (mb.IsStatic && !IsStatic)
+				{
+					args = ArrayUtil.Concat(obj, args);
+					obj = null;
+				}
+				return InvokeAndUnwrapException(mb, obj, args);
+			}
+
+			[HideFromJava]
+			internal override object CreateInstance(object[] args)
+			{
+				MethodBase mb = mbHelper != null ? mbHelper : GetMethod();
+				if (mb.IsStatic)
+				{
+					return InvokeAndUnwrapException(mb, null, args);
+				}
+				return base.CreateInstance(args);
+			}
+
+			[HideFromJava]
+			internal override object InvokeNonvirtualRemapped(object obj, object[] args)
+			{
 				MethodInfo mi = mbNonvirtualHelper;
 				if (mi == null)
 				{
 					mi = mbHelper;
 				}
-				object[] args1 = new object[args.Length + 1];
-				args1[0] = obj;
-				args.CopyTo(args1, 1);
-				return mi.Invoke(null, args1);
+				return mi.Invoke(null, ArrayUtil.Concat(obj, args));
 			}
+#endif // !STATIC_COMPILER && !FIRST_PASS && !STUB_GENERATOR
 
+#if EMITTERS
 			internal override void EmitCallvirtReflect(CodeEmitter ilgen)
 			{
 				MethodBase mb = mbHelper != null ? mbHelper : GetMethod();
 				ilgen.Emit(mb.IsStatic ? OpCodes.Call : OpCodes.Callvirt, mb);
 			}
-#endif // !STATIC_COMPILER
+#endif // EMITTERS
 
 			internal string GetGenericSignature()
 			{
@@ -4554,7 +4639,7 @@ namespace IKVM.Internal
 			}
 		}
 
-#if !STUB_GENERATOR
+#if EMITTERS
 		internal override void EmitRunClassConstructor(CodeEmitter ilgen)
 		{
 			if(HasStaticInitializer)
@@ -4562,7 +4647,7 @@ namespace IKVM.Internal
 				ilgen.Emit(OpCodes.Call, clinitMethod);
 			}
 		}
-#endif // !STUB_GENERATOR
+#endif // EMITTERS
 
 		internal override string GetGenericSignature()
 		{

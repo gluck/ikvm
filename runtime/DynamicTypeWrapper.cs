@@ -45,7 +45,8 @@ namespace IKVM.Internal
 #if STATIC_COMPILER
 	abstract class DynamicTypeWrapper : TypeWrapper
 #else
-	class DynamicTypeWrapper : TypeWrapper
+#pragma warning disable 628 // don't complain about protected members in sealed type
+	sealed class DynamicTypeWrapper : TypeWrapper
 #endif
 	{
 #if STATIC_COMPILER
@@ -1157,8 +1158,7 @@ namespace IKVM.Internal
 						MethodWrapper mw = new DelegateInvokeStubMethodWrapper(wrapper, iface.DeclaringTypeWrapper.TypeAsBaseType, iface.GetMethods()[0].Signature);
 						if (GetMethodWrapperDuringCtor(wrapper, methods, mw.Name, mw.Signature) == null)
 						{
-							Array.Resize(ref methods, methods.Length + 1);
-							methods[methods.Length - 1] = mw;
+							methods = ArrayUtil.Concat(methods, mw);
 						}
 					}
 					AddDelegateInvokeStubs(iface, ref methods);
@@ -3819,6 +3819,12 @@ namespace IKVM.Internal
 					}
 					else
 					{
+#if STATIC_COMPILER
+						if (methods[i].GetParameters().Length > MethodHandleUtil.MaxArity && methods[i].RequiresNonVirtualDispatcher && wrapper.GetClassLoader().EmitNoRefEmitHelpers)
+						{
+							wrapper.GetClassLoader().GetTypeWrapperFactory().DefineDelegate(methods[i].GetParameters().Length, methods[i].ReturnType == PrimitiveTypeWrapper.VOID);
+						}
+#endif
 						if (m.IsAbstract)
 						{
 							bool stub = false;
@@ -3883,9 +3889,7 @@ namespace IKVM.Internal
 									TypeWrapper[] nargs = args;
 									if (!m.IsStatic)
 									{
-										nargs = new TypeWrapper[args.Length + 1];
-										args.CopyTo(nargs, 1);
-										nargs[0] = this.wrapper;
+										nargs = ArrayUtil.Concat(wrapper, args);
 									}
 									MethodInfo[] nativeCodeTypeMethods = nativeCodeType.GetMethods(BindingFlags.Static | BindingFlags.Public);
 									foreach (MethodInfo method in nativeCodeTypeMethods)
@@ -4126,6 +4130,7 @@ namespace IKVM.Internal
 )
 					{
 						parameterNames = new string[methods[i].GetParameters().Length];
+						GetParameterNamesFromMP(m, parameterNames);
 						GetParameterNamesFromLVT(m, parameterNames);
 						GetParameterNamesFromSig(m.Signature, parameterNames);
 #if STATIC_COMPILER
@@ -4546,9 +4551,7 @@ namespace IKVM.Internal
 					}
 					// we append the IKVM.Attributes.AccessStub type to the modopt array for use in the property accessor method signature
 					// to make sure they never conflict with any user defined methhods
-					Type[] modopt2 = modopt;
-					Array.Resize(ref modopt2, modopt2.Length + 1);
-					modopt2[modopt2.Length - 1] = JVM.LoadType(typeof(IKVM.Attributes.AccessStub));
+					Type[] modopt2 = ArrayUtil.Concat(modopt, JVM.LoadType(typeof(IKVM.Attributes.AccessStub)));
 					MethodBuilder getter = typeBuilder.DefineMethod("get_" + fw.Name, attribs, CallingConventions.Standard, propType, null, modopt2, Type.EmptyTypes, null, null);
 					AttributeHelper.HideFromJava(getter);
 					pb.SetGetMethod(getter);
@@ -4650,9 +4653,7 @@ namespace IKVM.Internal
 					modopt[i] = wrapper.GetModOpt(parameters[i], true);
 				}
 				Type returnType = mw.ReturnType.TypeAsPublicSignatureType;
-				Type[] modoptReturnType = wrapper.GetModOpt(mw.ReturnType, true);
-				Array.Resize(ref modoptReturnType, modoptReturnType.Length + 1);
-				modoptReturnType[modoptReturnType.Length - 1] = JVM.LoadType(typeof(IKVM.Attributes.AccessStub));
+				Type[] modoptReturnType = ArrayUtil.Concat(wrapper.GetModOpt(mw.ReturnType, true), JVM.LoadType(typeof(IKVM.Attributes.AccessStub)));
 				string name;
 				if (mw.Name == StringConstants.INIT)
 				{
@@ -5793,6 +5794,21 @@ namespace IKVM.Internal
 			ilgen.DoEmit();
 		}
 
+		private static void GetParameterNamesFromMP(ClassFile.Method m, string[] parameterNames)
+		{
+			ClassFile.Method.MethodParametersEntry[] methodParameters = m.MethodParameters;
+			if (methodParameters != null)
+			{
+				for (int i = 0, count = Math.Min(parameterNames.Length, methodParameters.Length); i < count; i++)
+				{
+					if (parameterNames[i] == null)
+					{
+						parameterNames[i] = methodParameters[i].name;
+					}
+				}
+			}
+		}
+
 		protected static void GetParameterNamesFromLVT(ClassFile.Method m, string[] parameterNames)
 		{
 			ClassFile.Method.LocalVariableTableEntry[] localVars = m.LocalVariableTableAttribute;
@@ -5973,9 +5989,35 @@ namespace IKVM.Internal
 		protected abstract TypeBuilder DefineGhostType(string mangledTypeName, TypeAttributes typeAttribs);
 #endif // STATIC_COMPILER
 
-		protected virtual bool IsPInvokeMethod(ClassFile.Method m)
+		private bool IsPInvokeMethod(ClassFile.Method m)
 		{
-#if CLASSGC
+#if STATIC_COMPILER
+			Dictionary<string, IKVM.Internal.MapXml.Class> mapxml = classLoader.GetMapXmlClasses();
+			if (mapxml != null)
+			{
+				IKVM.Internal.MapXml.Class clazz;
+				if (mapxml.TryGetValue(this.Name, out clazz) && clazz.Methods != null)
+				{
+					foreach (IKVM.Internal.MapXml.Method method in clazz.Methods)
+					{
+						if (method.Name == m.Name && method.Sig == m.Signature)
+						{
+							if (method.Attributes != null)
+							{
+								foreach (IKVM.Internal.MapXml.Attribute attr in method.Attributes)
+								{
+									if (StaticCompiler.GetType(classLoader, attr.Type) == JVM.Import(typeof(System.Runtime.InteropServices.DllImportAttribute)))
+									{
+										return true;
+									}
+								}
+							}
+							break;
+						}
+					}
+				}
+			}
+#elif CLASSGC
 			// TODO PInvoke is not supported in RunAndCollect assemblies,
 			if (JVM.classUnloading)
 			{
@@ -6199,14 +6241,19 @@ namespace IKVM.Internal
 			Debug.Fail("Unreachable code");
 			return null;
 		}
+
+		private Type GetBaseTypeForDefineType()
+		{
+			return BaseTypeWrapper.TypeAsBaseType;
+		}
 #endif
 
+#if STATIC_COMPILER
 		protected virtual Type GetBaseTypeForDefineType()
 		{
 			return BaseTypeWrapper.TypeAsBaseType;
 		}
 
-#if STATIC_COMPILER
 		internal virtual MethodWrapper[] GetReplacedMethodsFor(MethodWrapper mw)
 		{
 			return null;

@@ -25,7 +25,9 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Reflection;
+#if !NO_REF_EMIT
 using System.Reflection.Emit;
+#endif
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Security;
@@ -442,7 +444,7 @@ static class Java_java_io_ObjectStreamClass
 		return false;
 	}
 
-#if !FIRST_PASS
+#if !FIRST_PASS && !NO_REF_EMIT
 	private sealed class FastFieldReflector : ikvm.@internal.FieldReflectorBase
 	{
 		private static readonly MethodInfo ReadByteMethod = typeof(IOHelpers).GetMethod("ReadByte");
@@ -705,14 +707,14 @@ static class Java_java_io_ObjectStreamClass
 			primFieldSetter(obj, barr);
 		}
 	}
-#endif // !FIRST_PASS
+#endif // !FIRST_PASS && !NO_REF_EMIT
 
-	public static object getFastFieldReflector(object fieldsObj)
+	public static object getFastFieldReflector(java.io.ObjectStreamField[] fieldsObj)
 	{
-#if FIRST_PASS
+#if FIRST_PASS || NO_REF_EMIT
 		return null;
 #else
-		return new FastFieldReflector((java.io.ObjectStreamField[])fieldsObj);
+		return new FastFieldReflector(fieldsObj);
 #endif
 	}
 }

@@ -154,66 +154,6 @@ struct MethodKey : IEquatable<MethodKey>
 
 static partial class MethodHandleUtil
 {
-	internal const int MaxArity = 8;
-	private static readonly Type typeofMHA;
-	private static readonly Type[] typeofMHV;
-	private static readonly Type[] typeofMH;
-
-	static MethodHandleUtil()
-	{
-#if STATIC_COMPILER
-		typeofMHA = StaticCompiler.GetRuntimeType("IKVM.Runtime.MHA`8");
-		typeofMHV = new Type[] {
-			StaticCompiler.GetRuntimeType("IKVM.Runtime.MHV"),
-			StaticCompiler.GetRuntimeType("IKVM.Runtime.MHV`1"),
-			StaticCompiler.GetRuntimeType("IKVM.Runtime.MHV`2"),
-			StaticCompiler.GetRuntimeType("IKVM.Runtime.MHV`3"),
-			StaticCompiler.GetRuntimeType("IKVM.Runtime.MHV`4"),
-			StaticCompiler.GetRuntimeType("IKVM.Runtime.MHV`5"),
-			StaticCompiler.GetRuntimeType("IKVM.Runtime.MHV`6"),
-			StaticCompiler.GetRuntimeType("IKVM.Runtime.MHV`7"),
-			StaticCompiler.GetRuntimeType("IKVM.Runtime.MHV`8"),
-		};
-		typeofMH = new Type[] {
-			null,
-			StaticCompiler.GetRuntimeType("IKVM.Runtime.MH`1"),
-			StaticCompiler.GetRuntimeType("IKVM.Runtime.MH`2"),
-			StaticCompiler.GetRuntimeType("IKVM.Runtime.MH`3"),
-			StaticCompiler.GetRuntimeType("IKVM.Runtime.MH`4"),
-			StaticCompiler.GetRuntimeType("IKVM.Runtime.MH`5"),
-			StaticCompiler.GetRuntimeType("IKVM.Runtime.MH`6"),
-			StaticCompiler.GetRuntimeType("IKVM.Runtime.MH`7"),
-			StaticCompiler.GetRuntimeType("IKVM.Runtime.MH`8"),
-			StaticCompiler.GetRuntimeType("IKVM.Runtime.MH`9"),
-		};
-#else
-		typeofMHA = typeof(IKVM.Runtime.MHA<,,,,,,,>);
-		typeofMHV = new Type[] {
-			typeof(IKVM.Runtime.MHV),
-			typeof(IKVM.Runtime.MHV<>),
-			typeof(IKVM.Runtime.MHV<,>),
-			typeof(IKVM.Runtime.MHV<,,>),
-			typeof(IKVM.Runtime.MHV<,,,>),
-			typeof(IKVM.Runtime.MHV<,,,,>),
-			typeof(IKVM.Runtime.MHV<,,,,,>),
-			typeof(IKVM.Runtime.MHV<,,,,,,>),
-			typeof(IKVM.Runtime.MHV<,,,,,,,>),
-		};
-		typeofMH = new Type[] {
-			null,
-			typeof(IKVM.Runtime.MH<>),
-			typeof(IKVM.Runtime.MH<,>),
-			typeof(IKVM.Runtime.MH<,,>),
-			typeof(IKVM.Runtime.MH<,,,>),
-			typeof(IKVM.Runtime.MH<,,,,>),
-			typeof(IKVM.Runtime.MH<,,,,,>),
-			typeof(IKVM.Runtime.MH<,,,,,,>),
-			typeof(IKVM.Runtime.MH<,,,,,,,>),
-			typeof(IKVM.Runtime.MH<,,,,,,,,>),
-		};
-#endif
-	}
-
 	internal static void EmitCallDelegateInvokeMethod(CodeEmitter ilgen, Type delegateType)
 	{
 		if (delegateType.IsGenericType)
@@ -235,7 +175,7 @@ static partial class MethodHandleUtil
 	private static void WrapArgs(CodeEmitter ilgen, Type type)
 	{
 		Type last = type.GetGenericArguments()[MaxArity - 1];
-		if (MethodHandleUtil.IsPackedArgsContainer(last))
+		if (IsPackedArgsContainer(last))
 		{
 			WrapArgs(ilgen, last);
 		}
@@ -266,28 +206,6 @@ static partial class MethodHandleUtil
 		}
 	}
 
-	internal static Type CreateDelegateType(TypeWrapper tw, MethodWrapper mw)
-	{
-		TypeWrapper[] args = mw.GetParameters();
-		if (!mw.IsStatic)
-		{
-			Array.Resize(ref args, args.Length + 1);
-			Array.Copy(args, 0, args, 1, args.Length - 1);
-			args[0] = tw;
-		}
-		return CreateDelegateType(args, mw.ReturnType);
-	}
-
-	internal static Type CreateDelegateType(TypeWrapper[] args, TypeWrapper ret)
-	{
-		Type[] typeArgs = new Type[args.Length];
-		for (int i = 0; i < args.Length; i++)
-		{
-			typeArgs[i] = args[i].TypeAsSignatureType;
-		}
-		return CreateDelegateType(typeArgs, ret.TypeAsSignatureType);
-	}
-
 	// for delegate types used for "ldc <MethodType>" we don't want ghost arrays to be erased
 	internal static Type CreateDelegateTypeForLoadConstant(TypeWrapper[] args, TypeWrapper ret)
 	{
@@ -314,57 +232,6 @@ static partial class MethodHandleUtil
 		{
 			return tw.TypeAsSignatureType;
 		}
-	}
-
-	private static Type CreateDelegateType(Type[] types, Type retType)
-	{
-		if (types.Length == 0 && retType == Types.Void)
-		{
-			return typeofMHV[0];
-		}
-		else if (types.Length > MaxArity)
-		{
-			int arity = types.Length;
-			int remainder = (arity - 8) % 7;
-			int count = (arity - 8) / 7;
-			if (remainder == 0)
-			{
-				remainder = 7;
-				count--;
-			}
-			Type last = typeofMHA.MakeGenericType(SubArray(types, types.Length - 8, 8));
-			for (int i = 0; i < count; i++)
-			{
-				Type[] temp = SubArray(types, types.Length - 8 - 7 * (i + 1), 8);
-				temp[7] = last;
-				last = typeofMHA.MakeGenericType(temp);
-			}
-			types = SubArray(types, 0, remainder + 1);
-			types[remainder] = last;
-		}
-		if (retType == Types.Void)
-		{
-			return typeofMHV[types.Length].MakeGenericType(types);
-		}
-		else
-		{
-			Array.Resize(ref types, types.Length + 1);
-			types[types.Length - 1] = retType;
-			return typeofMH[types.Length].MakeGenericType(types);
-		}
-	}
-
-	private static Type[] SubArray(Type[] inArray, int start, int length)
-	{
-		Type[] outArray = new Type[length];
-		Array.Copy(inArray, start, outArray, 0, length);
-		return outArray;
-	}
-
-	internal static bool IsPackedArgsContainer(Type type)
-	{
-		return type.IsGenericType
-			&& type.GetGenericTypeDefinition() == typeofMHA;
 	}
 }
 
@@ -3381,10 +3248,7 @@ sealed class Compiler
 			}
 			if (arg0 != null)
 			{
-				TypeWrapper[] newArgs = new TypeWrapper[args.Length + 1];
-				newArgs[0] = arg0;
-				Array.Copy(args, 0, newArgs, 1, args.Length);
-				args = newArgs;
+				args = ArrayUtil.Concat(arg0, args);
 			}
 			if (HasUnloadable(args, ret))
 			{
@@ -3860,9 +3724,7 @@ sealed class Compiler
 			}
 			else
 			{
-				args = new TypeWrapper[cpi.GetArgTypes().Length + 1];
-				Array.Copy(cpi.GetArgTypes(), 0, args, 1, args.Length - 1);
-				args[0] = CoreClasses.java.lang.invoke.MethodHandle.Wrapper;
+				args = ArrayUtil.Concat(CoreClasses.java.lang.invoke.MethodHandle.Wrapper, cpi.GetArgTypes());
 				temps = new CodeEmitterLocal[args.Length];
 				for (int i = args.Length - 1; i >= 0; i--)
 				{
@@ -3963,9 +3825,7 @@ sealed class Compiler
 			else
 			{
 				ret = cpi.GetRetType();
-				args = new TypeWrapper[cpi.GetArgTypes().Length + 1];
-				Array.Copy(cpi.GetArgTypes(), 0, args, 1, args.Length - 1);
-				args[0] = cpi.GetClassType();
+				args = ArrayUtil.Concat(cpi.GetClassType(), cpi.GetArgTypes());
 			}
 			return Emit(context, kind, cpi, ret, args);
 		}

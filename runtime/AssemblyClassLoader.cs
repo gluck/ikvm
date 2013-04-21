@@ -860,7 +860,7 @@ namespace IKVM.Internal
 			if (!found && unmangledName.EndsWith(".class", StringComparison.Ordinal) && unmangledName.IndexOf('.') == unmangledName.Length - 6)
 			{
 				TypeWrapper tw = FindLoadedClass(unmangledName.Substring(0, unmangledName.Length - 6).Replace('/', '.'));
-				if (tw != null && tw.GetClassLoader() == this && !tw.IsArray && !(tw is DynamicTypeWrapper))
+				if (tw != null && tw.GetClassLoader() == this && !tw.IsArray && !tw.IsDynamic)
 				{
 #if !FIRST_PASS
 					yield return new java.io.File(VirtualFileSystem.GetAssemblyClassesPath(assemblyLoader.Assembly) + unmangledName).toURI().toURL();
@@ -1103,8 +1103,7 @@ namespace IKVM.Internal
 			LazyInitExports();
 			lock (this)
 			{
-				Array.Resize(ref delegates, delegates.Length + 1);
-				delegates[delegates.Length - 1] = acl;
+				delegates = ArrayUtil.Concat(delegates, acl);
 			}
 		}
 

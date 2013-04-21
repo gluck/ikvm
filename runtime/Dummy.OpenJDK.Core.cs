@@ -1,5 +1,5 @@
 /*
-  Copyright (C) 2010 Jeroen Frijters
+  Copyright (C) 2010-2013 Jeroen Frijters
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -65,6 +65,7 @@ namespace java
 		namespace reflect
 		{
 			public class Constructor { }
+			public class Field { }
 			public class Method { }
 		}
 	}
@@ -91,4 +92,11 @@ namespace java
 		public class Enumeration { }
 		public class Vector { }
 	}
+}
+
+namespace sun.reflect
+{
+	public interface ConstructorAccessor { }
+	public interface FieldAccessor { }
+	public interface MethodAccessor { }
 }

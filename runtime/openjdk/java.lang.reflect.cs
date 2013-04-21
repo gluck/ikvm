@@ -678,7 +678,7 @@ static class Java_java_lang_reflect_Proxy
 			wrappers[i] = TypeWrapper.FromClass(interfaces[i]);
 		}
 		// TODO support multi assembly class loaders
-		Type type = acl.MainAssembly.GetType(DynamicClassLoader.GetProxyName(wrappers));
+		Type type = acl.MainAssembly.GetType(TypeNameUtil.GetProxyName(wrappers));
 		if (type == null)
 		{
 			return null;
@@ -707,7 +707,7 @@ static class Java_java_lang_reflect_Proxy
 
 static class Java_java_lang_reflect_Field
 {
-	public static object getDeclaredAnnotationsImpl(object thisField)
+	public static object getDeclaredAnnotationsImpl(java.lang.reflect.Field thisField)
 	{
 		FieldWrapper fw = FieldWrapper.FromField(thisField);
 		return Java_java_lang_Class.AnnotationsToMap(fw.DeclaringType.GetClassLoader(), fw.DeclaringType.GetFieldAnnotations(fw));
@@ -755,9 +755,9 @@ static class Java_java_lang_reflect_Method
 #endif
 	}
 
-	public static object getDefaultValue(object thisMethod)
+	public static object getDefaultValue(java.lang.reflect.Method thisMethod)
 	{
-		MethodWrapper mw = MethodWrapper.FromMethodOrConstructor(thisMethod);
+		MethodWrapper mw = MethodWrapper.FromMethod(thisMethod);
 		return mw.DeclaringType.GetAnnotationDefault(mw);
 	}
 }

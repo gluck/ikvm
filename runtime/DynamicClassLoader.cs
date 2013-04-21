@@ -62,6 +62,7 @@ namespace IKVM.Internal
 #endif // STATIC_COMPILER
 		private Dictionary<string, TypeBuilder> unloadables;
 		private TypeBuilder unloadableContainer;
+		private Type[] delegates;
 #if !STATIC_COMPILER && !CLASSGC
 		private static DynamicClassLoader instance = new DynamicClassLoader(CreateModuleBuilder(), false);
 #endif
@@ -273,7 +274,7 @@ namespace IKVM.Internal
 		{
 			if (proxiesContainer == null)
 			{
-				proxiesContainer = moduleBuilder.DefineType("__<Proxies>", TypeAttributes.Public | TypeAttributes.Class | TypeAttributes.Sealed | TypeAttributes.Abstract);
+				proxiesContainer = moduleBuilder.DefineType(TypeNameUtil.ProxiesContainer, TypeAttributes.Public | TypeAttributes.Class | TypeAttributes.Sealed | TypeAttributes.Abstract);
 				AttributeHelper.HideFromJava(proxiesContainer);
 				AttributeHelper.SetEditorBrowsableNever(proxiesContainer);
 				proxies = new List<TypeBuilder>();
@@ -283,26 +284,11 @@ namespace IKVM.Internal
 			{
 				ifaces[i] = interfaces[i].TypeAsBaseType;
 			}
-			TypeBuilder tb = proxiesContainer.DefineNestedType(GetProxyNestedName(interfaces), TypeAttributes.NestedPublic | TypeAttributes.Class | TypeAttributes.Sealed, proxyClass.TypeAsBaseType, ifaces);
+			TypeBuilder tb = proxiesContainer.DefineNestedType(TypeNameUtil.GetProxyNestedName(interfaces), TypeAttributes.NestedPublic | TypeAttributes.Class | TypeAttributes.Sealed, proxyClass.TypeAsBaseType, ifaces);
 			proxies.Add(tb);
 			return tb;
 		}
 #endif
-
-		private static string GetProxyNestedName(TypeWrapper[] interfaces)
-		{
-			System.Text.StringBuilder sb = new System.Text.StringBuilder();
-			foreach (TypeWrapper tw in interfaces)
-			{
-				sb.Append(tw.Name.Length).Append('|').Append(tw.Name);
-			}
-			return TypeNameUtil.MangleNestedTypeName(sb.ToString());
-		}
-
-		internal static string GetProxyName(TypeWrapper[] interfaces)
-		{
-			return "__<Proxies>+" + GetProxyNestedName(interfaces);
-		}
 
 		internal override Type DefineUnloadable(string name)
 		{
@@ -324,6 +310,47 @@ namespace IKVM.Internal
 				}
 				type = unloadableContainer.DefineNestedType(TypeNameUtil.MangleNestedTypeName(name), TypeAttributes.NestedPrivate | TypeAttributes.Interface | TypeAttributes.Abstract);
 				unloadables.Add(name, type);
+				return type;
+			}
+		}
+
+		internal override Type DefineDelegate(int parameterCount, bool returnVoid)
+		{
+			lock (this)
+			{
+				if (delegates == null)
+				{
+					delegates = new Type[512];
+				}
+				int index = parameterCount + (returnVoid ? 256 : 0);
+				Type type = delegates[index];
+				if (type != null)
+				{
+					return type;
+				}
+				TypeBuilder tb = moduleBuilder.DefineType(returnVoid ? "__<>NVIV`" + parameterCount : "__<>NVI`" + (parameterCount + 1), TypeAttributes.NotPublic | TypeAttributes.Sealed, Types.MulticastDelegate);
+				string[] names = new string[parameterCount + (returnVoid ? 0 : 1)];
+				for (int i = 0; i < names.Length; i++)
+				{
+					names[i] = "P" + i;
+				}
+				if (!returnVoid)
+				{
+					names[names.Length - 1] = "R";
+				}
+				Type[] genericParameters = tb.DefineGenericParameters(names);
+				Type[] parameterTypes = genericParameters;
+				if (!returnVoid)
+				{
+					parameterTypes = new Type[genericParameters.Length - 1];
+					Array.Copy(genericParameters, parameterTypes, parameterTypes.Length);
+				}
+				tb.DefineMethod(ConstructorInfo.ConstructorName, MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.RTSpecialName, Types.Void, new Type[] { Types.Object, Types.IntPtr })
+					.SetImplementationFlags(MethodImplAttributes.Runtime);
+				MethodBuilder mb = tb.DefineMethod("Invoke", MethodAttributes.Public | MethodAttributes.NewSlot | MethodAttributes.Virtual, returnVoid ? Types.Void : genericParameters[genericParameters.Length - 1], parameterTypes);
+				mb.SetImplementationFlags(MethodImplAttributes.Runtime);
+				type = tb.CreateType();
+				delegates[index] = type;
 				return type;
 			}
 		}
