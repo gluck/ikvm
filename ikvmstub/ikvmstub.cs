@@ -387,6 +387,7 @@ static class NetExp
 					try
 					{
 						ProcessClass(c);
+						WriteClass(c);
 					}
 					catch (Exception x)
 					{
@@ -400,7 +401,6 @@ static class NetExp
 							throw;
 						}
 					}
-					WriteClass(c);
 				}
 			}
 		} while(keepGoing);
@@ -497,7 +497,7 @@ static class Intrinsics
 
 static class StaticCompiler
 {
-	internal static readonly Universe Universe = new Universe();
+	internal static readonly Universe Universe = new Universe(UniverseOptions.EnableFunctionPointers);
 	internal static readonly AssemblyResolver Resolver = new AssemblyResolver();
 	internal static Assembly runtimeAssembly;
 

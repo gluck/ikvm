@@ -359,7 +359,7 @@ namespace IKVM.Internal
 				this.baseWrapper = baseWrapper;
 			}
 
-			internal override TypeWrapper BaseTypeWrapper
+			internal sealed override TypeWrapper BaseTypeWrapper
 			{
 				get { return baseWrapper; }
 			}
@@ -367,6 +367,11 @@ namespace IKVM.Internal
 			internal sealed override bool IsFakeNestedType
 			{
 				get { return true; }
+			}
+
+			internal sealed override Modifiers ReflectiveModifiers
+			{
+				get { return Modifiers | Modifiers.Static; }
 			}
 		}
 
@@ -2411,7 +2416,11 @@ namespace IKVM.Internal
 				}
 				type = type.GetElementType();
 			}
+#if STATIC_COMPILER || STUB_GENERATOR
+			return type.__IsFunctionPointer;
+#else
 			return false;
+#endif
 		}
 
 		private bool MakeMethodDescriptor(MethodBase mb, out string name, out string sig, out TypeWrapper[] args, out TypeWrapper ret)
@@ -2542,12 +2551,12 @@ namespace IKVM.Internal
 					foreach (ParameterInfo p in invoke.GetParameters())
 					{
 						// we don't support delegates with pointer parameters
-						if (p.ParameterType.IsPointer)
+						if (IsPointerType(p.ParameterType))
 						{
 							return false;
 						}
 					}
-					return true;
+					return !IsPointerType(invoke.ReturnType);
 				}
 			}
 			return false;
