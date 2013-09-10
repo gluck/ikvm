@@ -803,6 +803,7 @@ static class NetExp
 					try
 					{
 						ProcessClass(c);
+						WriteClass(c);
 					}
 					catch (Exception x)
 					{
@@ -816,7 +817,6 @@ static class NetExp
 							throw;
 						}
 					}
-					WriteClass(c);
 				}
 			}
 		} while(keepGoing);

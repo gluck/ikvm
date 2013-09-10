@@ -918,13 +918,15 @@ namespace IKVM.Internal
 		internal void ResolveMethod()
 		{
 			// if we've still got the builder object, we need to replace it with the real thing before we can call it
-			if(method is MethodBuilder)
+			MethodBuilder mb = method as MethodBuilder;
+			if(mb != null)
 			{
-				method = method.Module.ResolveMethod(((MethodBuilder)method).GetToken().Token);
+				method = mb.Module.ResolveMethod(mb.GetToken().Token);
 			}
-			if(method is ConstructorBuilder)
+			ConstructorBuilder cb = method as ConstructorBuilder;
+			if(cb != null)
 			{
-				method = method.Module.ResolveMethod(((ConstructorBuilder)method).GetToken().Token);
+				method = cb.Module.ResolveMethod(cb.GetToken().Token);
 			}
 		}
 
@@ -1393,7 +1395,7 @@ namespace IKVM.Internal
 			FieldBuilder fb = field as FieldBuilder;
 			if(fb != null)
 			{
-				field = field.Module.ResolveField(fb.GetToken().Token);
+				field = fb.Module.ResolveField(fb.GetToken().Token);
 			}
 		}
 

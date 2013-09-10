@@ -4945,6 +4945,10 @@ namespace IKVM.Internal
 					if (!interfaceList.Contains(iface))
 					{
 						interfaceList.Add(iface);
+						if (!iface.IsAccessibleFrom(wrapper))
+						{
+							continue;
+						}
 						// NOTE we're using TypeAsBaseType for the interfaces!
 						Type ifaceType = iface.TypeAsBaseType;
 						if (!iface.IsPublic && !ReflectUtil.IsSameAssembly(ifaceType, typeBuilder))

@@ -398,15 +398,7 @@ struct LocalVarInfo
 
 					for (int j = 0; j < exceptions.Length; j++)
 					{
-						// if we're currently inside an exception block, we need to merge our current state with the exception handler
-						// and if we right after the exception block (i == method.ExceptionTable[j].endIndex) and the block ends in
-						// an instruction that simply falls through, we need to merge our current state with the exception handler as
-						// well (because the last instruction may be a store to a local variable that affects the type of the local variable)
-						// (note that we can legally access instructions[i - 1] because an empty exception block is illegal)
-						if (exceptions[j].startIndex <= i
-							&& (i < exceptions[j].endIndex
-								|| (i == exceptions[j].endIndex
-									&& ByteCodeMetaData.GetFlowControl(instructions[i - 1].NormalizedOpCode) == ByteCodeFlowControl.Next)))
+						if (exceptions[j].startIndex <= i && i < exceptions[j].endIndex)
 						{
 							state[exceptions[j].handlerIndex].Merge(curr);
 						}
@@ -429,6 +421,15 @@ struct LocalVarInfo
 						&& (instructions[i].NormalizedOpCode != NormalizedByteCode.__astore || !VerifierTypeWrapper.IsFaultBlockException(codeInfo.GetRawStackTypeWrapper(i, 0))))
 					{
 						curr.Store(i, instructions[i].NormalizedArg1);
+						// if this is a store at the end of an exception block,
+						// we need to propagate the new state to the exception handler
+						for (int j = 0; j < exceptions.Length; j++)
+						{
+							if (exceptions[j].endIndex == i + 1)
+							{
+								state[exceptions[j].handlerIndex].Merge(curr);
+							}
+						}
 					}
 
 					if (instructions[i].NormalizedOpCode == NormalizedByteCode.__invokespecial)
@@ -463,8 +464,8 @@ struct LocalVarInfo
 
 						// Now we recursively analyse the handler and afterwards merge the endfault locations back to us
 						FindLocalVarState[] handlerState = new FindLocalVarState[instructions.Length];
-						handlerState[handler].changed = true;
-						handlerState[handler].sites = new FindLocalVarStoreSite[maxLocals];
+						handlerState[handler].Merge(curr);
+						curr = new FindLocalVarState();
 						FindLocalVariablesImpl(codeInfo, classFile, method, handlerState);
 
 						// Merge back to the target of our __goto_finally
@@ -475,7 +476,7 @@ struct LocalVarInfo
 								&& VerifierTypeWrapper.IsFaultBlockException(codeInfo.GetRawStackTypeWrapper(j, 0))
 								&& ((VerifierTypeWrapper)codeInfo.GetRawStackTypeWrapper(j, 0)).Index == handler)
 							{
-								state[instructions[i].Arg1].Merge(handlerState[j]);
+								curr.Merge(handlerState[j]);
 							}
 						}
 					}

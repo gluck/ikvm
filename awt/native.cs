@@ -547,7 +547,7 @@ namespace IKVM.NativeCode.sun.awt.shell
             {
                 return;
             }
-            Marshal.Release(pIDL);
+            Marshal.FreeCoTaskMem(pIDL);
         }
 
 		/// <summary>

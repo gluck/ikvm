@@ -353,6 +353,11 @@ namespace IKVM.Internal
 			{
 				get { return true; }
 			}
+
+			internal sealed override Modifiers ReflectiveModifiers
+			{
+				get { return Modifiers | Modifiers.Static; }
+			}
 		}
 
 		private sealed class DelegateInnerClassTypeWrapper : FakeTypeWrapper
@@ -2137,8 +2142,9 @@ namespace IKVM.Internal
 							InterfaceMapping map = type.GetInterfaceMap(interfaces[i]);
 							for (int j = 0; j < map.InterfaceMethods.Length; j++)
 							{
-								if ((!map.TargetMethods[j].IsPublic || map.TargetMethods[j].Name != map.InterfaceMethods[j].Name)
-									&& map.TargetMethods[j].DeclaringType == type)
+								if (map.TargetMethods[j] == null
+									|| ((!map.TargetMethods[j].IsPublic || map.TargetMethods[j].Name != map.InterfaceMethods[j].Name)
+										&& map.TargetMethods[j].DeclaringType == type))
 								{
 									string name;
 									string sig;
@@ -2423,13 +2429,13 @@ namespace IKVM.Internal
 				{
 					foreach (ParameterInfo p in invoke.GetParameters())
 					{
-						// TODO at the moment we don't support delegates with pointer or byref parameters
-						if (p.ParameterType.IsPointer || p.ParameterType.IsByRef)
+						// we don't support delegates with pointer parameters
+						if (IsPointerType(p.ParameterType))
 						{
 							return false;
 						}
 					}
-					return true;
+					return !IsPointerType(invoke.ReturnType);
 				}
 			}
 			return false;
