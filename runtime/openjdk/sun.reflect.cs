@@ -43,8 +43,7 @@ namespace IKVM.Internal
 	}
 #endif
 
-	// this must be public (due to .NET 4.0 security model)
-	public sealed class State
+	sealed class State
 	{
 		internal int Value;
 	}
@@ -57,7 +56,7 @@ static class Java_sun_reflect_Reflection
 
 	internal static bool IsHideFromJava(MethodBase mb)
 	{
-		State state = isHideFromJavaCache.GetOrCreateValue(mb);
+		State state = isHideFromJavaCache.GetValue(mb, delegate { return new State(); });
 		if (state.Value == 0)
 		{
 			state.Value = IsHideFromJavaImpl(mb);
@@ -120,7 +119,7 @@ static class Java_sun_reflect_Reflection
 
 	// NOTE this method is hooked up explicitly through map.xml to prevent inlining of the native stub
 	// and tail-call optimization in the native stub.
-	public static object getCallerClass(int realFramesToSkip)
+	public static java.lang.Class getCallerClass0(int realFramesToSkip)
 	{
 #if FIRST_PASS
 		return null;

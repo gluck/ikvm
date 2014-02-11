@@ -350,7 +350,7 @@ namespace IKVM.Runtime
 		{
 			private const string library = "ikvm-native-win32-x86";
 
-			[DllImport(library)]
+			[DllImport(library, SetLastError = true)]
 			private static extern IntPtr ikvm_LoadLibrary(string filename);
 			[DllImport(library)]
 			private static extern void ikvm_FreeLibrary(IntPtr handle);
@@ -398,7 +398,7 @@ namespace IKVM.Runtime
 		{
 			private const string library = "ikvm-native-win32-x64";
 
-			[DllImport(library)]
+			[DllImport(library, SetLastError = true)]
 			private static extern IntPtr ikvm_LoadLibrary(string filename);
 			[DllImport(library)]
 			private static extern void ikvm_FreeLibrary(IntPtr handle);
@@ -446,7 +446,7 @@ namespace IKVM.Runtime
 		{
 			private const string library = "ikvm-native";
 
-			[DllImport(library)]
+			[DllImport(library, SetLastError = true)]
 			private static extern IntPtr ikvm_LoadLibrary(string filename);
 			[DllImport(library)]
 			private static extern void ikvm_FreeLibrary(IntPtr handle);
@@ -553,7 +553,8 @@ namespace IKVM.Runtime
 				IntPtr p = NativeLibrary.LoadLibrary(filename);
 				if(p == IntPtr.Zero)
 				{
-					Tracer.Info(Tracer.Jni, "Library not found: {0}", filename);
+					Tracer.Info(Tracer.Jni, "Failed to load library: path = '{0}', error = {1}, message = {2}", filename,
+						Marshal.GetLastWin32Error(), new System.ComponentModel.Win32Exception().Message);
 					return 0;
 				}
 				try
@@ -1725,7 +1726,10 @@ namespace IKVM.Runtime
 		{
 			ManagedJNIEnv env = pEnv->GetManagedJNIEnv();
 			Exception x = UnwrapRef(env, throwable) as Exception;
-			env.pendingException = x;
+			if (x != null)
+			{
+				env.pendingException = x;
+			}
 			return JNI_OK;
 		}
 
@@ -1733,7 +1737,7 @@ namespace IKVM.Runtime
 		{
 			ManagedJNIEnv env = pEnv->GetManagedJNIEnv();
 			TypeWrapper wrapper = TypeWrapper.FromClass((java.lang.Class)UnwrapRef(env, clazz));
-			MethodWrapper mw = wrapper.GetMethodWrapper("<init>", "(Ljava.lang.String;)V", false);
+			MethodWrapper mw = wrapper.GetMethodWrapper("<init>", msg == null ? "()V" : "(Ljava.lang.String;)V", false);
 			if(mw != null)
 			{
 				jint rc;
@@ -1742,7 +1746,7 @@ namespace IKVM.Runtime
 				{
 					wrapper.Finish();
 					java.lang.reflect.Constructor cons = (java.lang.reflect.Constructor)mw.ToMethodOrConstructor(false);
-					exception = (Exception)cons.newInstance(new object[] { StringFromOEM(msg) }, env.callerID);
+					exception = (Exception)cons.newInstance(msg == null ? new object[0] : new object[] { StringFromOEM(msg) }, env.callerID);
 					rc = JNI_OK;
 				}
 				catch(RetargetableJavaException x)
@@ -2711,6 +2715,11 @@ namespace IKVM.Runtime
 
 		internal static jobject NewStringUTF(JNIEnv* pEnv, byte* psz)
 		{
+			if (psz == null)
+			{
+				// The JNI spec does not explicitly allow a null pointer, but the JDK accepts it
+				return IntPtr.Zero;
+			}
 			return pEnv->MakeLocalRef(StringFromUTF8(psz));
 		}
 

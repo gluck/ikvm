@@ -1,5 +1,5 @@
 /*
-  Copyright (C) 2002-2013 Jeroen Frijters
+  Copyright (C) 2002-2014 Jeroen Frijters
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -2715,6 +2715,10 @@ namespace IKVM.Internal
 			List<string> classNames = new List<string>();
 			foreach (Jar jar in options.jars)
 			{
+				if (options.IsResourcesJar(jar))
+				{
+					continue;
+				}
 				foreach (Jar.Item item in jar)
 				{
 					string name = item.Name;
@@ -2723,33 +2727,25 @@ namespace IKVM.Internal
 						&& name.IndexOf('.') == name.Length - 6)
 					{
 						string className = name.Substring(0, name.Length - 6).Replace('/', '.');
-						if (options.IsExcludedClass(className))
+						if (h.ContainsKey(className))
 						{
-							// we don't compile the class and we also don't include it as a resource
-							item.Remove();
-						}
-						else
-						{
-							if (h.ContainsKey(className))
+							StaticCompiler.IssueMessage(Message.DuplicateClassName, className);
+							Jar.Item itemRef = h[className];
+							if ((options.classesJar != -1 && itemRef.Jar == options.jars[options.classesJar]) || jar != itemRef.Jar)
 							{
-								StaticCompiler.IssueMessage(Message.DuplicateClassName, className);
-								Jar.Item itemRef = h[className];
-								if ((options.classesJar != -1 && itemRef.Jar == options.jars[options.classesJar]) || jar != itemRef.Jar)
-								{
-									// the previous class stays, because it was either in an earlier jar or we're processing the classes.jar
-									// which contains the classes loaded from the file system (where the first encountered class wins)
-									continue;
-								}
-								else
-								{
-									// we have a jar that contains multiple entries with the same name, the last one wins
-									h.Remove(className);
-									classNames.Remove(className);
-								}
+								// the previous class stays, because it was either in an earlier jar or we're processing the classes.jar
+								// which contains the classes loaded from the file system (where the first encountered class wins)
+								continue;
 							}
-							h.Add(className, item);
-							classNames.Add(className);
+							else
+							{
+								// we have a jar that contains multiple entries with the same name, the last one wins
+								h.Remove(className);
+								classNames.Remove(className);
+							}
 						}
+						h.Add(className, item);
+						classNames.Add(className);
 					}
 				}
 			}
@@ -3478,7 +3474,7 @@ namespace IKVM.Internal
 		internal Assembly[] references;
 		internal string[] peerReferences;
 		internal bool crossReferenceAllPeers = true;
-		internal string[] classesToExclude;
+		internal string[] classesToExclude;		// only used during command line parsing
 		internal FileInfo remapfile;
 		internal Dictionary<string, string> props;
 		internal bool noglobbing;
@@ -3579,13 +3575,21 @@ namespace IKVM.Internal
 			return jars[resourcesJar];
 		}
 
+		internal bool IsResourcesJar(Jar jar)
+		{
+			return resourcesJar != -1 && jars[resourcesJar] == jar;
+		}
+
 		internal bool IsExcludedClass(string className)
 		{
-			for (int i = 0; i < classesToExclude.Length; i++)
+			if (classesToExclude != null)
 			{
-				if (Regex.IsMatch(className, classesToExclude[i]))
+				for (int i = 0; i < classesToExclude.Length; i++)
 				{
-					return true;
+					if (Regex.IsMatch(className, classesToExclude[i]))
+					{
+						return true;
+					}
 				}
 			}
 			return false;
@@ -3635,6 +3639,7 @@ namespace IKVM.Internal
 		UnableToResolveType = 133,
 		StubsAreDeprecated = 134,
 		WrongClassName = 135,
+		ReflectionCallerClassRequiresCallerID = 136,
 		UnknownWarning = 999,
 		// This is where the errors start
 		StartErrors = 4000,
@@ -3653,6 +3658,7 @@ namespace IKVM.Internal
 		NonPrimaryAssemblyReference = 4013,
 		MissingType = 4014,
 		MissingReference = 4015,
+		CallerSensitiveOnUnsupportedMethod = 4016,
 		// Fatal errors
 		ResponseFileDepthExceeded = 5000,
 		ErrorReadingFile = 5001,
@@ -3710,6 +3716,7 @@ namespace IKVM.Internal
 		MissingBaseType = 5053,
 		MissingBaseTypeReference = 5054,
 		FileNotFound = 5055,
+		RuntimeMethodMissing = 5056,
 	}
 
 	static class StaticCompiler
@@ -3967,6 +3974,10 @@ namespace IKVM.Internal
 				case Message.WrongClassName:
 					msg = "Unable to compile \"{0}\" (wrong name: \"{1}\")";
 					break;
+				case Message.ReflectionCallerClassRequiresCallerID:
+					msg = "Reflection.getCallerClass() called from non-CallerID method" + Environment.NewLine +
+						"    (\"{0}.{1}{2}\")";
+					break;
 				case Message.UnableToCreateProxy:
 					msg = "Unable to create proxy \"{0}\"" + Environment.NewLine +
 						"    (\"{1}\")";
@@ -4006,6 +4017,10 @@ namespace IKVM.Internal
 					break;
 				case Message.UnknownWarning:
 					msg = "{0}";
+					break;
+				case Message.CallerSensitiveOnUnsupportedMethod:
+					msg = "CallerSensitive annotation on unsupported method" + Environment.NewLine +
+						"    (\"{0}.{1}{2}\")";
 					break;
 				default:
 					throw new InvalidProgramException();

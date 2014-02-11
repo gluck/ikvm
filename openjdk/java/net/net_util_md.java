@@ -271,6 +271,17 @@ final class net_util_md
             optval = tos;
         }
 
+        if (optname == SO_REUSEADDR) {
+            /*
+             * Do not set SO_REUSEADDE if SO_EXCLUSIVEADDUSE is already set
+             */
+            int[] parg = new int[1];
+            rv = NET_GetSockOpt(s, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, parg);
+            if (rv == 0 && parg[0] == 1) {
+                return rv;
+            }
+        }
+
         rv = setsockopt(s, level, optname, optval);
 
         if (rv == SOCKET_ERROR) {
@@ -330,6 +341,18 @@ final class net_util_md
     }
 
     /*
+     * Sets SO_ECLUSIVEADDRUSE if SO_REUSEADDR is not already set.
+     */
+    static void setExclusiveBind(cli.System.Net.Sockets.Socket fd) {
+        int[] parg = new int[1];
+        int rv = 0;
+        rv = NET_GetSockOpt(fd, SOL_SOCKET, SO_REUSEADDR, parg);
+        if (rv == 0 && parg[0] == 0) {
+            rv = NET_SetSockOpt(fd, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, 1);
+        }
+    }
+
+    /*
      * Wrapper for bind winsock call - transparent converts an
      * error related to binding to a port that has exclusive access
      * into an error indicating the port is in use (facilitates
@@ -337,7 +360,8 @@ final class net_util_md
      */
     static int NET_Bind(cli.System.Net.Sockets.Socket s, SOCKETADDRESS him)
     {
-        int rv = bind(s, him);
+        int rv;
+        rv = bind(s, him);
 
         if (rv == SOCKET_ERROR) {
             /*
@@ -350,6 +374,17 @@ final class net_util_md
         }
 
         return rv;
+    }
+
+    /*
+     * Wrapper for NET_Bind call. Sets SO_EXCLUSIVEADDRUSE
+     * if required, and then calls NET_BIND
+     */
+    static int NET_WinBind(cli.System.Net.Sockets.Socket s, SOCKETADDRESS him, boolean exclBind)
+    {
+        if (exclBind == JNI_TRUE)
+            setExclusiveBind(s);
+        return NET_Bind(s, him);
     }
 
     static int NET_SocketClose(cli.System.Net.Sockets.Socket fd) {
@@ -470,7 +505,7 @@ final class net_util_md
         return SOCKET_ERROR;
     }
 
-    static int NET_BindV6(ipv6bind b) {
+    static int NET_BindV6(ipv6bind b, boolean exclBind) {
         cli.System.Net.Sockets.Socket fd = null;
         cli.System.Net.Sockets.Socket ofd = null;
         int rv;
@@ -487,7 +522,7 @@ final class net_util_md
         if (family == AF_INET && (b.addr.him4.sin_addr.s_addr != INADDR_ANY)) {
             /* bind to v4 only */
             int ret;
-            ret = NET_Bind (b.ipv4_fd, b.addr);
+            ret = NET_WinBind (b.ipv4_fd, b.addr, exclBind);
             if (ret == SOCKET_ERROR) {
                 return CLOSE_SOCKETS_AND_RETURN(fd, ofd, close_fd, close_ofd, b);
             }
@@ -498,7 +533,7 @@ final class net_util_md
         if (family == AF_INET6 && (!IN6ADDR_ISANY(b.addr))) {
             /* bind to v6 only */
             int ret;
-            ret = NET_Bind (b.ipv6_fd, b.addr);
+            ret = NET_WinBind (b.ipv6_fd, b.addr, exclBind);
             if (ret == SOCKET_ERROR) {
                 return CLOSE_SOCKETS_AND_RETURN(fd, ofd, close_fd, close_ofd, b);
             }
@@ -523,7 +558,7 @@ final class net_util_md
             oaddr.set(new IPEndPoint(IPAddress.Any, htons(port)));
         }
 
-        rv = NET_Bind (fd, b.addr);
+        rv = NET_WinBind (fd, b.addr, exclBind);
         if (rv == SOCKET_ERROR) {
             return CLOSE_SOCKETS_AND_RETURN(fd, ofd, close_fd, close_ofd, b);
         }
@@ -568,7 +603,8 @@ final class net_util_md
 
                 /* bind random port on first socket */
                 oaddr.sin_port = 0;
-                rv = NET_Bind (ofd, oaddr);
+                rv = NET_WinBind (ofd, oaddr,
+                                  exclBind);
                 if (rv == SOCKET_ERROR) {
                     return CLOSE_SOCKETS_AND_RETURN(fd, ofd, close_fd, close_ofd, b);
                 }
@@ -583,7 +619,8 @@ final class net_util_md
                 }
                 bound_port = oaddr.sin_port;
                 b.addr.sin_port = bound_port;
-                rv = NET_Bind (fd, b.addr);
+                rv = NET_WinBind (fd, b.addr,
+                                  exclBind);
 
                 if (rv != SOCKET_ERROR) {
                     if (family == AF_INET) {
@@ -608,8 +645,8 @@ final class net_util_md
      * structure for an IPv4 InetAddress.
     */
     static int NET_InetAddressToSockaddr(JNIEnv env, InetAddress iaObj, int port, SOCKETADDRESS him, boolean v4MappedAddress) {
-        if (iaObj.family == InetAddress.IPv4) {
-            him.set(new IPEndPoint(new IPAddress(htonl(iaObj.address) & 0xFFFFFFFFL), port));
+        if (iaObj.holder().family == InetAddress.IPv4) {
+            him.set(new IPEndPoint(new IPAddress(htonl(iaObj.holder().address) & 0xFFFFFFFFL), port));
             return 0;
         } else {
             Inet6Address v6addr = (Inet6Address)iaObj;
@@ -688,7 +725,7 @@ final class net_util_md
     }
 
     static boolean NET_SockaddrEqualsInetAddress(SOCKETADDRESS him, InetAddress iaObj) {
-        int family = iaObj.family == InetAddress.IPv4 ? AF_INET : AF_INET6;
+        int family = iaObj.holder().family == InetAddress.IPv4 ? AF_INET : AF_INET6;
 
         if (him.sa_family == AF_INET6) {
             byte[] caddrNew = him.him6.sin6_addr;
@@ -699,7 +736,7 @@ final class net_util_md
                         return false;
                     }
                     addrNew = NET_IPv4MappedToIPv4(caddrNew);
-                    addrCur = iaObj.address;
+                    addrCur = iaObj.holder().address;
                     if (addrNew == addrCur) {
                         return true;
                     } else {
@@ -726,7 +763,7 @@ final class net_util_md
                 return false;
             }
             addrNew = ntohl(him.him4.sin_addr.s_addr);
-            addrCur = iaObj.address;
+            addrCur = iaObj.holder().address;
             if (addrNew == addrCur) {
                 return true;
             } else {
@@ -835,5 +872,13 @@ final class net_util_md
             //SetHandleInformation((HANDLE)(uintptr_t)sock, HANDLE_FLAG_INHERIT, FALSE);
         }
         return sock;
+    }
+
+    static int getInetAddress_addr(JNIEnv env, InetAddress iaObj) {
+        return iaObj.holder().address;
+    }
+
+    static int getInetAddress_family(JNIEnv env, InetAddress iaObj) {
+        return iaObj.holder().family;
     }
 }

@@ -389,7 +389,11 @@ sealed class InstructionState
 			st2.Push(t2);
 			t2 = t2.BaseTypeWrapper;
 		}
-		TypeWrapper type = null;
+		if(HasMissingBaseType(st1) || HasMissingBaseType(st2))
+		{
+			return VerifierTypeWrapper.Unloadable;
+		}
+		TypeWrapper type = CoreClasses.java.lang.Object.Wrapper;
 		for(;;)
 		{
 			t1 = st1.Count > 0 ? st1.Pop() : null;
@@ -400,6 +404,19 @@ sealed class InstructionState
 			}
 			type = t1;
 		}
+	}
+
+	private static bool HasMissingBaseType(Stack<TypeWrapper> st)
+	{
+#if STATIC_COMPILER
+		if (st.Pop().IsUnloadable)
+		{
+			// we have a missing type in base class hierarchy
+			StaticCompiler.IssueMissingTypeMessage(st.Pop().TypeAsBaseType.BaseType);
+			return true;
+		}
+#endif
+		return false;
 	}
 
 	private void SetLocal1(int index, TypeWrapper type)
@@ -562,7 +579,12 @@ sealed class InstructionState
 
 	internal void PopInt()
 	{
-		if(PopAnyType() != PrimitiveTypeWrapper.INT)
+		PopIntImpl(PopAnyType());
+	}
+
+	internal static void PopIntImpl(TypeWrapper type)
+	{
+		if (type != PrimitiveTypeWrapper.INT)
 		{
 			throw new VerifyError("Int expected on stack");
 		}
@@ -571,26 +593,41 @@ sealed class InstructionState
 	internal bool PopFloat()
 	{
 		TypeWrapper tw = PopAnyType();
+		PopFloatImpl(tw);
+		return tw == VerifierTypeWrapper.ExtendedFloat;
+	}
+
+	internal static void PopFloatImpl(TypeWrapper tw)
+	{
 		if(tw != PrimitiveTypeWrapper.FLOAT && tw != VerifierTypeWrapper.ExtendedFloat)
 		{
 			throw new VerifyError("Float expected on stack");
 		}
-		return tw == VerifierTypeWrapper.ExtendedFloat;
 	}
 
 	internal bool PopDouble()
 	{
 		TypeWrapper tw = PopAnyType();
+		PopDoubleImpl(tw);
+		return tw == VerifierTypeWrapper.ExtendedDouble;
+	}
+
+	internal static void PopDoubleImpl(TypeWrapper tw)
+	{
 		if(tw != PrimitiveTypeWrapper.DOUBLE && tw != VerifierTypeWrapper.ExtendedDouble)
 		{
 			throw new VerifyError("Double expected on stack");
 		}
-		return tw == VerifierTypeWrapper.ExtendedDouble;
 	}
 
 	internal void PopLong()
 	{
-		if(PopAnyType() != PrimitiveTypeWrapper.LONG)
+		PopLongImpl(PopAnyType());
+	}
+
+	internal static void PopLongImpl(TypeWrapper tw)
+	{
+		if(tw != PrimitiveTypeWrapper.LONG)
 		{
 			throw new VerifyError("Long expected on stack");
 		}
@@ -598,7 +635,11 @@ sealed class InstructionState
 
 	internal TypeWrapper PopArrayType()
 	{
-		TypeWrapper type = PopAnyType();
+		return PopArrayTypeImpl(PopAnyType());
+	}
+
+	internal static TypeWrapper PopArrayTypeImpl(TypeWrapper type)
+	{
 		if(!VerifierTypeWrapper.IsNullOrUnloadable(type) && type.ArrayRank == 0)
 		{
 			throw new VerifyError("Array reference expected on stack");
@@ -609,7 +650,11 @@ sealed class InstructionState
 	// null or an initialized object reference
 	internal TypeWrapper PopObjectType()
 	{
-		TypeWrapper type = PopType();
+		return PopObjectTypeImpl(PopType());
+	}
+
+	internal static TypeWrapper PopObjectTypeImpl(TypeWrapper type)
+	{
 		if(type.IsPrimitive || VerifierTypeWrapper.IsNew(type) || type == VerifierTypeWrapper.UninitializedThis)
 		{
 			throw new VerifyError("Expected object reference on stack");
@@ -620,7 +665,11 @@ sealed class InstructionState
 	// null or an initialized object reference derived from baseType (or baseType)
 	internal TypeWrapper PopObjectType(TypeWrapper baseType)
 	{
-		TypeWrapper type = PopObjectType();
+		return PopObjectTypeImpl(baseType, PopObjectType());
+	}
+
+	internal static TypeWrapper PopObjectTypeImpl(TypeWrapper baseType, TypeWrapper type)
+	{
 		// HACK because of the way interfaces references works, if baseType
 		// is an interface or array of interfaces, any reference will be accepted
 		if(!baseType.IsUnloadable && !baseType.IsInterfaceOrInterfaceArray && !(type.IsUnloadable || type.IsAssignableTo(baseType)))
@@ -678,7 +727,11 @@ sealed class InstructionState
 	// NOTE this can *not* be used to pop double or long
 	internal TypeWrapper PopType()
 	{
-		TypeWrapper type = PopAnyType();
+		return PopTypeImpl(PopAnyType());
+	}
+
+	internal static TypeWrapper PopTypeImpl(TypeWrapper type)
+	{
 		if(type.IsWidePrimitive || type == VerifierTypeWrapper.ExtendedDouble)
 		{
 			throw new VerifyError("Attempt to split long or double on the stack");
@@ -691,36 +744,73 @@ sealed class InstructionState
 	// NOTE this can also be used to pop double or long
 	internal TypeWrapper PopType(TypeWrapper baseType)
 	{
+		return PopTypeImpl(baseType, PopAnyType());
+	}
+
+	internal static TypeWrapper PopTypeImpl(TypeWrapper baseType, TypeWrapper type)
+	{
 		if(baseType.IsIntOnStackPrimitive)
 		{
 			baseType = PrimitiveTypeWrapper.INT;
 		}
-		TypeWrapper type = PopAnyType();
 		if(VerifierTypeWrapper.IsNew(type) || type == VerifierTypeWrapper.UninitializedThis)
 		{
 			throw new VerifyError("Expecting to find object/array on stack");
 		}
-		if(type != baseType &&
-			!((type.IsUnloadable && !baseType.IsPrimitive) || (baseType.IsUnloadable && !type.IsPrimitive) ||
-				type.IsAssignableTo(baseType)))
+		if(type == baseType)
 		{
-			// HACK because of the way interfaces references works, if baseType
-			// is an interface or array of interfaces, any reference will be accepted
-			if((baseType.IsUnloadable || baseType.IsInterfaceOrInterfaceArray) && !type.IsPrimitive)
-			{
-				return type;
-			}
-			if(type == VerifierTypeWrapper.ExtendedDouble && baseType == PrimitiveTypeWrapper.DOUBLE)
-			{
-				return type;
-			}
-			if(type == VerifierTypeWrapper.ExtendedFloat && baseType == PrimitiveTypeWrapper.FLOAT)
-			{
-				return type;
-			}
-			throw new VerifyError("Unexpected type " + type.Name + " where " + baseType.Name + " was expected");
+			return type;
 		}
-		return type;
+		else if(type == VerifierTypeWrapper.ExtendedDouble && baseType == PrimitiveTypeWrapper.DOUBLE)
+		{
+			return type;
+		}
+		else if(type == VerifierTypeWrapper.ExtendedFloat && baseType == PrimitiveTypeWrapper.FLOAT)
+		{
+			return type;
+		}
+		else if(type.IsPrimitive || baseType.IsPrimitive)
+		{
+			// throw at the end of the method
+		}
+		else if(baseType == CoreClasses.java.lang.Object.Wrapper)
+		{
+			return type;
+		}
+		else if(type.IsUnloadable || baseType.IsUnloadable)
+		{
+			return type;
+		}
+		else if (baseType.IsInterfaceOrInterfaceArray)
+		{
+			// because of the way interfaces references works, if baseType
+			// is an interface or array of interfaces, any reference will be accepted
+			return type;
+		}
+		else if (type.IsAssignableTo(baseType))
+		{
+			return type;
+		}
+		else if (HasMissingBaseType(type) || HasMissingBaseType(baseType))
+		{
+			return type;
+		}
+		throw new VerifyError("Unexpected type " + type.Name + " where " + baseType.Name + " was expected");
+	}
+
+	private static bool HasMissingBaseType(TypeWrapper tw)
+	{
+#if STATIC_COMPILER
+		for (TypeWrapper baseTypeWrapper; (baseTypeWrapper = tw.BaseTypeWrapper) != null; tw = baseTypeWrapper)
+		{
+			if (baseTypeWrapper.IsUnloadable)
+			{
+				StaticCompiler.IssueMissingTypeMessage(tw.TypeAsBaseType.BaseType);
+				return true;
+			}
+		}
+#endif
+		return false;
 	}
 
 	internal int GetStackHeight()
@@ -889,115 +979,50 @@ struct StackState
 
 	internal TypeWrapper PopType(TypeWrapper baseType)
 	{
-		if(baseType.IsIntOnStackPrimitive)
-		{
-			baseType = PrimitiveTypeWrapper.INT;
-		}
-		TypeWrapper type = PopAnyType();
-		if(VerifierTypeWrapper.IsNew(type) || type == VerifierTypeWrapper.UninitializedThis)
-		{
-			throw new VerifyError("Expecting to find object/array on stack");
-		}
-		if(type != baseType &&
-			!((type.IsUnloadable && !baseType.IsPrimitive) || (baseType.IsUnloadable && !type.IsPrimitive) ||
-			type.IsAssignableTo(baseType)))
-		{
-			// HACK because of the way interfaces references works, if baseType
-			// is an interface or array of interfaces, any reference will be accepted
-			if((baseType.IsUnloadable || baseType.IsInterfaceOrInterfaceArray) && !type.IsPrimitive)
-			{
-				return type;
-			}
-			if(type == VerifierTypeWrapper.ExtendedDouble && baseType == PrimitiveTypeWrapper.DOUBLE)
-			{
-				return type;
-			}
-			if(type == VerifierTypeWrapper.ExtendedFloat && baseType == PrimitiveTypeWrapper.FLOAT)
-			{
-				return type;
-			}
-			throw new VerifyError("Unexpected type " + type.Name + " where " + baseType.Name + " was expected");
-		}
-		return type;
+		return InstructionState.PopTypeImpl(baseType, PopAnyType());
 	}
 
 	// NOTE this can *not* be used to pop double or long
 	internal TypeWrapper PopType()
 	{
-		TypeWrapper type = PopAnyType();
-		if(type.IsWidePrimitive || type == VerifierTypeWrapper.ExtendedDouble)
-		{
-			throw new VerifyError("Attempt to split long or double on the stack");
-		}
-		return type;
+		return InstructionState.PopTypeImpl(PopAnyType());
 	}
 
 	internal void PopInt()
 	{
-		if(PopAnyType() != PrimitiveTypeWrapper.INT)
-		{
-			throw new VerifyError("Int expected on stack");
-		}
+		InstructionState.PopIntImpl(PopAnyType());
 	}
 
 	internal void PopFloat()
 	{
-		TypeWrapper tw = PopAnyType();
-		if(tw != PrimitiveTypeWrapper.FLOAT && tw != VerifierTypeWrapper.ExtendedFloat)
-		{
-			throw new VerifyError("Float expected on stack");
-		}
+		InstructionState.PopFloatImpl(PopAnyType());
 	}
 
 	internal void PopDouble()
 	{
-		TypeWrapper tw = PopAnyType();
-		if(tw != PrimitiveTypeWrapper.DOUBLE && tw != VerifierTypeWrapper.ExtendedDouble)
-		{
-			throw new VerifyError("Double expected on stack");
-		}
+		InstructionState.PopDoubleImpl(PopAnyType());
 	}
 
 	internal void PopLong()
 	{
-		if(PopAnyType() != PrimitiveTypeWrapper.LONG)
-		{
-			throw new VerifyError("Long expected on stack");
-		}
+		InstructionState.PopLongImpl(PopAnyType());
 	}
 
 	internal TypeWrapper PopArrayType()
 	{
-		TypeWrapper type = PopAnyType();
-		if(!VerifierTypeWrapper.IsNullOrUnloadable(type) && type.ArrayRank == 0)
-		{
-			throw new VerifyError("Array reference expected on stack");
-		}
-		return type;
+		return InstructionState.PopArrayTypeImpl(PopAnyType());
 	}
 
 	// either null or an initialized object reference
 	internal TypeWrapper PopObjectType()
 	{
-		TypeWrapper type = PopAnyType();
-		if(type.IsPrimitive || VerifierTypeWrapper.IsNew(type) || type == VerifierTypeWrapper.UninitializedThis)
-		{
-			throw new VerifyError("Expected object reference on stack");
-		}
-		return type;
+		return InstructionState.PopObjectTypeImpl(PopAnyType());
 	}
 
 	// null or an initialized object reference derived from baseType (or baseType)
 	internal TypeWrapper PopObjectType(TypeWrapper baseType)
 	{
-		TypeWrapper type = PopObjectType();
-		// HACK because of the way interfaces references works, if baseType
-		// is an interface or array of interfaces, any reference will be accepted
-		if(!baseType.IsUnloadable && !baseType.IsInterfaceOrInterfaceArray && !(type.IsUnloadable || type.IsAssignableTo(baseType)))
-		{
-			throw new VerifyError("Unexpected type " + type + " where " + baseType + " was expected");
-		}
-		return type;
+		return InstructionState.PopObjectTypeImpl(baseType, PopObjectType());
 	}
 }
 
@@ -3189,6 +3214,11 @@ sealed class MethodAnalyzer
 											goto not_fault_block;
 										}
 									}
+									if (VerifierTypeWrapper.IsFaultBlockException(codeInfo.GetRawStackTypeWrapper(j, 0))
+										&& codeInfo.GetRawStackTypeWrapper(j, 0) != codeInfo.GetRawStackTypeWrapper(exceptions[i].handlerIndex, 0))
+									{
+										goto not_fault_block;
+									}
 									break;
 							}
 							if (j < current.startIndex || j >= current.endIndex)
@@ -3528,7 +3558,6 @@ sealed class MethodAnalyzer
 			thisType = null;
 		}
 		else if (invoke == NormalizedByteCode.__invokevirtual
-			&& classFile.MajorVersion >= 51
 			&& cpi.Class == "java.lang.invoke.MethodHandle"
 			&& (cpi.Name == "invoke" || cpi.Name == "invokeExact"))
 		{

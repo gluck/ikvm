@@ -380,6 +380,7 @@ namespace IKVM.Reflection
 		private Type[] typeArgs;
 		private int token;
 		private int flags;
+		private bool cyclicTypeForwarder;
 
 		internal MissingType(Module module, Type declaringType, string ns, string name)
 		{
@@ -388,6 +389,16 @@ namespace IKVM.Reflection
 			this.ns = ns;
 			this.name = name;
 			MarkEnumOrValueType(ns, name);
+
+			// HACK we need to handle the Windows Runtime projected types that change from ValueType to Class or v.v.
+			if (WindowsRuntimeProjection.IsProjectedValueType(ns, name, module))
+			{
+				typeFlags |= TypeFlags.ValueType;
+			}
+			else if (WindowsRuntimeProjection.IsProjectedReferenceType(ns, name, module))
+			{
+				typeFlags |= TypeFlags.NotValueType;
+			}
 		}
 
 		internal override MethodBase FindMethod(string name, MethodSignature signature)
@@ -465,6 +476,18 @@ namespace IKVM.Reflection
 						return true;
 					case TypeFlags.NotValueType:
 						return false;
+					case TypeFlags.ValueType | TypeFlags.NotValueType:
+						if (WindowsRuntimeProjection.IsProjectedValueType(ns, name, module))
+						{
+							typeFlags &= ~TypeFlags.NotValueType;
+							return true;
+						}
+						if (WindowsRuntimeProjection.IsProjectedReferenceType(ns, name, module))
+						{
+							typeFlags &= ~TypeFlags.ValueType;
+							return false;
+						}
+						goto default;
 					default:
 						if (module.universe.ResolveMissingTypeIsValueType(this))
 						{
@@ -579,6 +602,12 @@ namespace IKVM.Reflection
 			return this;
 		}
 
+		internal override Type SetCyclicTypeForwarder()
+		{
+			this.cyclicTypeForwarder = true;
+			return this;
+		}
+
 		internal override bool IsBaked
 		{
 			get { throw new MissingMemberException(this); }
@@ -588,6 +617,11 @@ namespace IKVM.Reflection
 		{
 			// CorTypeAttr.tdForwarder
 			get { return (flags & 0x00200000) != 0; }
+		}
+
+		public override bool __IsCyclicTypeForwarder
+		{
+			get { return cyclicTypeForwarder; }
 		}
 	}
 

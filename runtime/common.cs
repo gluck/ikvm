@@ -49,7 +49,7 @@ namespace IKVM.NativeCode.gnu.java.net.protocol.ikvmres
 			MemoryStream mem = new MemoryStream();
 #if !FIRST_PASS
 			bool includeNonPublicInterfaces = !"true".Equals(global::java.lang.Props.props.getProperty("ikvm.stubgen.skipNonPublicInterfaces"), StringComparison.OrdinalIgnoreCase);
-			IKVM.StubGen.StubGenerator.WriteClass(mem, TypeWrapper.FromClass(c), includeNonPublicInterfaces, false, false);
+			IKVM.StubGen.StubGenerator.WriteClass(mem, TypeWrapper.FromClass(c), includeNonPublicInterfaces, false, false, false);
 #endif
 			return mem.ToArray();
 		}
@@ -150,6 +150,15 @@ namespace IKVM.NativeCode.ikvm.@internal
 			return null;
 #else
 			return new global::sun.reflect.annotation.AnnotationInvocationHandler(type, (global::java.util.Map)memberValues);
+#endif
+		}
+
+		public static object newAnnotationTypeMismatchExceptionProxy(string msg)
+		{
+#if FIRST_PASS
+			return null;
+#else
+			return new global::sun.reflect.annotation.AnnotationTypeMismatchExceptionProxy(msg);
 #endif
 		}
 	}

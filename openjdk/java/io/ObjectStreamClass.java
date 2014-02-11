@@ -50,7 +50,10 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import sun.misc.Unsafe;
+import sun.reflect.CallerSensitive;
+import sun.reflect.Reflection;
 import sun.reflect.ReflectionFactory;
+import sun.reflect.misc.ReflectUtil;
 
 /**
  * Serialization's descriptor for classes.  It contains the name and
@@ -262,7 +265,17 @@ public class ObjectStreamClass implements Serializable {
      *
      * @return  the <code>Class</code> instance that this descriptor represents
      */
+    @CallerSensitive
     public Class<?> forClass() {
+        if (cl == null) {
+            return null;
+        }
+        if (System.getSecurityManager() != null) {
+            Class<?> caller = Reflection.getCallerClass();
+            if (ReflectUtil.needsPackageAccessCheck(caller.getClassLoader(), cl.getClassLoader())) {
+                ReflectUtil.checkPackageAccess(cl);
+            }
+        }
         return cl;
     }
 
@@ -1156,7 +1169,14 @@ public class ObjectStreamClass implements Serializable {
             end = end.getSuperclass();
         }
 
+        HashSet<String> oscNames = new HashSet<>(3);
+
         for (ObjectStreamClass d = this; d != null; d = d.superDesc) {
+            if (oscNames.contains(d.name)) {
+                throw new InvalidClassException("Circular reference.");
+            } else {
+                oscNames.add(d.name);
+            }
 
             // search up inheritance hierarchy for class with matching name
             String searchName = (d.cl != null) ? d.cl.getName() : d.name;
@@ -1848,8 +1868,10 @@ public class ObjectStreamClass implements Serializable {
         private final ObjectStreamField[] fields;
         /** number of primitive fields */
         private final int numPrimFields;
-        /** unsafe field keys */
-        private final long[] keys;
+        /** unsafe field keys for reading fields - may contain dupes */
+        private final long[] readKeys;
+        /** unsafe fields keys for writing fields - no dupes */
+        private final long[] writeKeys;
         /** field data offsets */
         private final int[] offsets;
         /** field type codes */
@@ -1867,16 +1889,22 @@ public class ObjectStreamClass implements Serializable {
         FieldReflector(ObjectStreamField[] fields) {
             this.fields = fields;
             int nfields = fields.length;
-            keys = new long[nfields];
+            readKeys = new long[nfields];
+            writeKeys = new long[nfields];
             offsets = new int[nfields];
             typeCodes = new char[nfields];
             ArrayList<Class<?>> typeList = new ArrayList<>();
+            Set<Long> usedKeys = new HashSet<>();
+
 
             for (int i = 0; i < nfields; i++) {
                 ObjectStreamField f = fields[i];
                 Field rf = f.getField();
-                keys[i] = (rf != null) ?
+                long key = (rf != null) ?
                     unsafe.objectFieldOffset(rf) : Unsafe.INVALID_FIELD_OFFSET;
+                readKeys[i] = key;
+                writeKeys[i] = usedKeys.add(key) ?
+                    key : Unsafe.INVALID_FIELD_OFFSET;
                 offsets[i] = f.getOffset();
                 typeCodes[i] = f.getTypeCode();
                 if (!f.isPrimitive()) {
@@ -1912,7 +1940,7 @@ public class ObjectStreamClass implements Serializable {
              * in array should be equal to Unsafe.INVALID_FIELD_OFFSET.
              */
             for (int i = 0; i < numPrimFields; i++) {
-                long key = keys[i];
+                long key = readKeys[i];
                 int off = offsets[i];
                 switch (typeCodes[i]) {
                     case 'Z':
@@ -1963,7 +1991,7 @@ public class ObjectStreamClass implements Serializable {
                 throw new NullPointerException();
             }
             for (int i = 0; i < numPrimFields; i++) {
-                long key = keys[i];
+                long key = writeKeys[i];
                 if (key == Unsafe.INVALID_FIELD_OFFSET) {
                     continue;           // discard value
                 }
@@ -2024,7 +2052,7 @@ public class ObjectStreamClass implements Serializable {
                 switch (typeCodes[i]) {
                     case 'L':
                     case '[':
-                        vals[offsets[i]] = unsafe.getObject(obj, keys[i]);
+                        vals[offsets[i]] = unsafe.getObject(obj, readKeys[i]);
                         break;
 
                     default:
@@ -2045,7 +2073,7 @@ public class ObjectStreamClass implements Serializable {
                 throw new NullPointerException();
             }
             for (int i = numPrimFields; i < fields.length; i++) {
-                long key = keys[i];
+                long key = writeKeys[i];
                 if (key == Unsafe.INVALID_FIELD_OFFSET) {
                     continue;           // discard value
                 }

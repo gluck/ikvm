@@ -528,19 +528,16 @@ namespace IKVM.Internal
 #if STATIC_COMPILER
 		internal static void SetImplementsAttribute(TypeBuilder typeBuilder, TypeWrapper[] ifaceWrappers)
 		{
-			if(ifaceWrappers != null && ifaceWrappers.Length != 0)
+			string[] interfaces = new string[ifaceWrappers.Length];
+			for(int i = 0; i < interfaces.Length; i++)
 			{
-				string[] interfaces = new string[ifaceWrappers.Length];
-				for(int i = 0; i < interfaces.Length; i++)
-				{
-					interfaces[i] = ifaceWrappers[i].Name;
-				}
-				if(implementsAttribute == null)
-				{
-					implementsAttribute = typeofImplementsAttribute.GetConstructor(new Type[] { JVM.Import(typeof(string[])) });
-				}
-				typeBuilder.SetCustomAttribute(new CustomAttributeBuilder(implementsAttribute, new object[] { interfaces }));
+				interfaces[i] = ifaceWrappers[i].Name;
 			}
+			if(implementsAttribute == null)
+			{
+				implementsAttribute = typeofImplementsAttribute.GetConstructor(new Type[] { JVM.Import(typeof(string[])) });
+			}
+			typeBuilder.SetCustomAttribute(new CustomAttributeBuilder(implementsAttribute, new object[] { interfaces }));
 		}
 #endif
 
@@ -1107,19 +1104,24 @@ namespace IKVM.Internal
 			return type.IsDefined(typeofNoPackagePrefixAttribute, false) || type.Assembly.IsDefined(typeofNoPackagePrefixAttribute, false);
 		}
 
+		internal static bool HasEnclosingMethodAttribute(Type type)
+		{
+			return type.IsDefined(typeofEnclosingMethodAttribute, false);
+		}
+
 		internal static EnclosingMethodAttribute GetEnclosingMethodAttribute(Type type)
 		{
 #if !STATIC_COMPILER && !STUB_GENERATOR
 			object[] attr = type.GetCustomAttributes(typeof(EnclosingMethodAttribute), false);
 			if (attr.Length == 1)
 			{
-				return (EnclosingMethodAttribute)attr[0];
+				return ((EnclosingMethodAttribute)attr[0]).SetClassName(type);
 			}
 			return null;
 #else
 			foreach (CustomAttributeData cad in CustomAttributeData.__GetCustomAttributes(type, typeofEnclosingMethodAttribute, false))
 			{
-				return new EnclosingMethodAttribute((string)cad.ConstructorArguments[0].Value, (string)cad.ConstructorArguments[1].Value, (string)cad.ConstructorArguments[2].Value);
+				return new EnclosingMethodAttribute((string)cad.ConstructorArguments[0].Value, (string)cad.ConstructorArguments[1].Value, (string)cad.ConstructorArguments[2].Value).SetClassName(type);
 			}
 			return null;
 #endif
@@ -1414,6 +1416,7 @@ namespace IKVM.Internal
 
 	abstract class Annotation
 	{
+#if !STUB_GENERATOR
 		// NOTE this method returns null if the type could not be found
 		// or if the type is not a Custom Attribute and we're not in the static compiler
 		internal static Annotation Load(ClassLoaderWrapper loader, object[] def)
@@ -1430,21 +1433,24 @@ namespace IKVM.Internal
 				return null;
 			}
 #endif
-			try
+			if (ClassFile.IsValidFieldSig(annotationClass))
 			{
-				TypeWrapper annot = loader.RetTypeWrapperFromSig(annotationClass.Replace('/', '.'));
-				return annot.Annotation;
+				try
+				{
+					return loader.RetTypeWrapperFromSig(annotationClass.Replace('/', '.')).Annotation;
+				}
+				catch (RetargetableJavaException)
+				{
+				}
 			}
-			catch (RetargetableJavaException)
-			{
-				Tracer.Warning(Tracer.Compiler, "Unable to load annotation class {0}", annotationClass);
+			Tracer.Warning(Tracer.Compiler, "Unable to load annotation class {0}", annotationClass);
 #if STATIC_COMPILER
-				return new CompiledTypeWrapper.CompiledAnnotation(StaticCompiler.GetRuntimeType("IKVM.Attributes.DynamicAnnotationAttribute"));
+			return new CompiledTypeWrapper.CompiledAnnotation(StaticCompiler.GetRuntimeType("IKVM.Attributes.DynamicAnnotationAttribute"));
 #else
-				return null;
+			return null;
 #endif
-			}
 		}
+#endif
 
 		private static object LookupEnumValue(Type enumType, string value)
 		{
@@ -1681,6 +1687,10 @@ namespace IKVM.Internal
 						}
 					}
 				}
+				return val;
+			}
+			else if(val[0].Equals(AnnotationDefaultAttribute.TAG_ERROR))
+			{
 				return val;
 			}
 			else
@@ -3695,10 +3705,10 @@ namespace IKVM.Internal
 				{
 					return name;
 				}
-				if(type.DeclaringType != null)
-				{
-					return GetName(type.DeclaringType) + "$" + TypeNameUtil.Unescape(type.Name);
-				}
+			}
+			if(type.DeclaringType != null)
+			{
+				return GetName(type.DeclaringType) + "$" + TypeNameUtil.Unescape(type.Name);
 			}
 			return TypeNameUtil.Unescape(type.FullName);
 		}
@@ -3841,6 +3851,10 @@ namespace IKVM.Internal
 			ImplementsAttribute attr = AttributeHelper.GetImplements(type);
 			if (attr == null)
 			{
+				if (BaseTypeWrapper == CoreClasses.java.lang.Object.Wrapper)
+				{
+					return GetImplementedInterfacesAsTypeWrappers(type);
+				}
 				return TypeWrapper.EmptyArray;
 			}
 			string[] interfaceNames = attr.Interfaces;
@@ -3878,25 +3892,48 @@ namespace IKVM.Internal
 			return interfaceWrappers;
 		}
 
+		private static bool IsNestedTypeAnonymousOrLocalClass(Type type)
+		{
+			switch (type.Attributes & (TypeAttributes.SpecialName | TypeAttributes.VisibilityMask))
+			{
+				case TypeAttributes.SpecialName | TypeAttributes.NestedPublic:
+				case TypeAttributes.SpecialName | TypeAttributes.NestedAssembly:
+					return AttributeHelper.HasEnclosingMethodAttribute(type);
+				default:
+					return false;
+			}
+		}
+
+		private static bool IsAnnotationAttribute(Type type)
+		{
+			return type.Name.EndsWith("Attribute", StringComparison.Ordinal)
+				&& type.IsClass
+				&& type.BaseType.FullName == "ikvm.internal.AnnotationAttributeBase";
+		}
+
 		internal override TypeWrapper[] InnerClasses
 		{
 			get
 			{
-				Type[] nestedTypes = type.GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
 				List<TypeWrapper> wrappers = new List<TypeWrapper>();
-				for(int i = 0; i < nestedTypes.Length; i++)
+				foreach(Type nested in type.GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
 				{
-					if(nestedTypes[i].Name.EndsWith("Attribute", StringComparison.Ordinal)
-						&& nestedTypes[i].IsClass
-						&& nestedTypes[i].BaseType.FullName == "ikvm.internal.AnnotationAttributeBase")
+					if(IsAnnotationAttribute(nested))
 					{
 						// HACK it's the custom attribute we generated for a corresponding annotation, so we shouldn't surface it as an inner classes
 						// (we can't put a HideFromJavaAttribute on it, because we do want the class to be visible as a $Proxy)
-						continue;
 					}
-					if(!AttributeHelper.IsHideFromJava(nestedTypes[i]))
+					else if(IsNestedTypeAnonymousOrLocalClass(nested))
 					{
-						wrappers.Add(ClassLoaderWrapper.GetWrapperFromType(nestedTypes[i]));
+						// anonymous and local classes are not reported as inner classes
+					}
+					else if(AttributeHelper.IsHideFromJava(nested))
+					{
+						// ignore
+					}
+					else
+					{
+						wrappers.Add(ClassLoaderWrapper.GetWrapperFromType(nested));
 					}
 				}
 				foreach(string s in AttributeHelper.GetNonNestedInnerClasses(type))
@@ -3911,6 +3948,10 @@ namespace IKVM.Internal
 		{
 			get
 			{
+				if(IsNestedTypeAnonymousOrLocalClass(type))
+				{
+					return null;
+				}
 				Type declaringType = type.DeclaringType;
 				if(declaringType != null)
 				{
@@ -3923,6 +3964,47 @@ namespace IKVM.Internal
 				}
 				return null;
 			}
+		}
+
+		// returns true iff name is of the form "...$<n>"
+		private static bool IsAnonymousClassName(string name)
+		{
+			int index = name.LastIndexOf('$') + 1;
+			if (index > 1 && index < name.Length)
+			{
+				while (index < name.Length)
+				{
+					if ("0123456789".IndexOf(name[index++]) == -1)
+					{
+						return false;
+					}
+				}
+				return true;
+			}
+			return false;
+		}
+
+		// This method uses some heuristics to predict the reflective modifiers and if the prediction matches
+		// we can avoid storing the InnerClassesAttribute to record the modifiers.
+		// The heuristics are based on javac from Java 7.
+		internal static Modifiers PredictReflectiveModifiers(TypeWrapper tw)
+		{
+			Modifiers modifiers = Modifiers.Static | (tw.Modifiers & (Modifiers.Public | Modifiers.Abstract | Modifiers.Interface));
+			// javac marks anonymous classes as final, but the InnerClasses attribute access_flags does not have the ACC_FINAL flag set
+			if (tw.IsFinal && !IsAnonymousClassName(tw.Name))
+			{
+				modifiers |= Modifiers.Final;
+			}
+			// javac uses the this$0 field to store the outer instance reference for non-static inner classes
+			foreach (FieldWrapper fw in tw.GetFields())
+			{
+				if (fw.Name == "this$0")
+				{
+					modifiers &= ~Modifiers.Static;
+					break;
+				}
+			}
+			return modifiers;
 		}
 
 		internal override Modifiers ReflectiveModifiers
@@ -3938,6 +4020,10 @@ namespace IKVM.Internal
 						// the mask comes from RECOGNIZED_INNER_CLASS_MODIFIERS in src/hotspot/share/vm/classfile/classFileParser.cpp
 						// (minus ACC_SUPER)
 						mods = attr.Modifiers & (Modifiers)0x761F;
+					}
+					else if (type.DeclaringType != null)
+					{
+						mods = PredictReflectiveModifiers(this);
 					}
 					else
 					{
@@ -4843,6 +4929,14 @@ namespace IKVM.Internal
 			if(attr.Length == 1)
 			{
 				return ((SourceFileAttribute)attr[0]).SourceFile;
+			}
+			if(DeclaringTypeWrapper != null)
+			{
+				return DeclaringTypeWrapper.GetSourceFileName();
+			}
+			if(IsNestedTypeAnonymousOrLocalClass(type))
+			{
+				return ClassLoaderWrapper.GetWrapperFromType(type.DeclaringType).GetSourceFileName();
 			}
 			if(type.Module.IsDefined(typeof(SourceFileAttribute), false))
 			{

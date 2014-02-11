@@ -228,6 +228,9 @@
             <attribute type="IKVM.Attributes.SignatureAttribute" sig="(Ljava.lang.String;)V">
                 <parameter>Ljava/lang/Object;Ljava/io/Serializable;Ljava/lang/Comparable&lt;Ljava/lang/String;&gt;;Ljava/lang/CharSequence;</parameter>
             </attribute>
+            <attribute type="IKVM.Attributes.NonNestedInnerClassAttribute" sig="(Ljava.lang.String;)V">
+                <parameter>java.lang.String$CaseInsensitiveComparator</parameter>
+            </attribute>
             <field name="serialVersionUID" sig="J" modifiers="private static final" constant="-6849794470754667710" />
             <constructor sig="()V" modifiers="public">
                 <alternateBody>
@@ -2709,19 +2712,18 @@
         </class>
         <class name="sun.reflect.Reflection">
             <!-- we manually hook up this native method, to prevent inlining and tail-call optimizations -->
-            <method name="getCallerClass" sig="(I)Ljava.lang.Class;">
+            <method name="getCallerClass0" sig="(I)Ljava.lang.Class;">
                 <attribute type="System.Runtime.CompilerServices.MethodImplAttribute" sig="(Lcli.System.Runtime.CompilerServices.MethodImplOptions;)V">
                     <parameter>NoInlining</parameter>
                 </attribute>
                 <body>
                     <ldarg_0 />
-                    <call type="Java_sun_reflect_Reflection" name="getCallerClass" sig="(I)Ljava.lang.Object;" />
-                    <stloc name="class" class="java.lang.Object" />
+                    <call type="Java_sun_reflect_Reflection" name="getCallerClass0" sig="(I)Ljava.lang.Class;" />
+                    <stloc name="class" class="java.lang.Class" />
                     <!-- "leave" is to thwart tail-call optimization -->
                     <leave name="x" />
                     <label name="x" />
                     <ldloc name="class" />
-                    <castclass class="java.lang.Class" />
                     <ret />
                 </body>
             </method>

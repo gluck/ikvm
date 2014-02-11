@@ -65,7 +65,7 @@ namespace IKVM.Internal
 		private const ushort FLAG_MASK_MAJORVERSION = 0xFF;
 		private const ushort FLAG_MASK_DEPRECATED = 0x100;
 		private const ushort FLAG_MASK_INTERNAL = 0x200;
-		private const ushort FLAG_HAS_CALLERID = 0x400;
+		private const ushort FLAG_CALLERSENSITIVE = 0x400;
 		private ConstantPoolItemClass[] interfaces;
 		private Field[] fields;
 		private Method[] methods;
@@ -1914,6 +1914,8 @@ namespace IKVM.Internal
 					case RefKind.invokeStatic:
 					case RefKind.newInvokeSpecial:
 						cpi = classFile.GetConstantPoolItem(method_index) as ConstantPoolItemMethodref;
+						if (cpi == null && classFile.MajorVersion >= 52 && (RefKind)ref_kind == RefKind.invokeStatic)
+							goto case RefKind.invokeInterface;
 						break;
 					case RefKind.invokeInterface:
 						cpi = classFile.GetConstantPoolItem(method_index) as ConstantPoolItemInterfaceMethodref;
@@ -2585,7 +2587,8 @@ namespace IKVM.Internal
 					if((ReferenceEquals(Name, StringConstants.INIT) && (IsStatic || IsSynchronized || IsFinal || IsAbstract || IsNative))
 						|| (IsPrivate && IsPublic) || (IsPrivate && IsProtected) || (IsPublic && IsProtected)
 						|| (IsAbstract && (IsFinal || IsNative || IsPrivate || IsStatic || IsSynchronized))
-						|| (classFile.IsInterface && (!IsPublic || IsFinal || IsNative || IsSynchronized || (!IsAbstract && classFile.MajorVersion < 52))))
+						|| (classFile.IsInterface && classFile.MajorVersion <= 51 && (!IsPublic || IsFinal || IsNative || IsSynchronized || !IsAbstract))
+						|| (classFile.IsInterface && classFile.MajorVersion >= 52 && (!(IsPublic || IsPrivate) || IsFinal || IsNative || IsSynchronized)))
 					{
 						throw new ClassFormatError("Method {0} in class {1} has illegal modifiers: 0x{2:X}", Name, classFile.Name, (int)access_flags);
 					}
@@ -2652,6 +2655,15 @@ namespace IKVM.Internal
 								goto default;
 							}
 							annotations = ReadAnnotations(br, classFile, utf8_cp);
+#if STATIC_COMPILER
+							foreach(object[] annot in annotations)
+							{
+								if(annot[1].Equals("Lsun/reflect/CallerSensitive;"))
+								{
+									flags |= FLAG_CALLERSENSITIVE;
+								}
+							}
+#endif
 							break;
 						case "RuntimeVisibleParameterAnnotations":
 						{
@@ -2718,10 +2730,6 @@ namespace IKVM.Internal
 										this.access_flags &= ~Modifiers.AccessMask;
 										flags |= FLAG_MASK_INTERNAL;
 									}
-								}
-								if(annot[1].Equals("Likvm/internal/HasCallerID;"))
-								{
-									flags |= FLAG_HAS_CALLERID;
 								}
 								if(annot[1].Equals("Likvm/lang/DllExport;"))
 								{
@@ -2803,7 +2811,7 @@ namespace IKVM.Internal
 							code.verifyError = string.Format("Class {0}, method {1} signature {2}: No Code attribute", classFile.Name, this.Name, this.Signature);
 							return;
 						}
-						throw new ClassFormatError("Method has no Code attribute");
+						throw new ClassFormatError("Absent Code attribute in method that is not native or abstract in class file " + classFile.Name);
 					}
 				}
 			}
@@ -2841,14 +2849,15 @@ namespace IKVM.Internal
 				}
 			}
 
-			// for use by ikvmc only
-			internal bool HasCallerIDAnnotation
+#if STATIC_COMPILER
+			internal bool IsCallerSensitive
 			{
 				get
 				{
-					return (flags & FLAG_HAS_CALLERID) != 0;
+					return (flags & FLAG_CALLERSENSITIVE) != 0;
 				}
 			}
+#endif
 
 			internal string[] ExceptionsAttribute
 			{

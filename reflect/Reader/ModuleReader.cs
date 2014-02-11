@@ -91,7 +91,18 @@ namespace IKVM.Reflection.Reader
 
 			internal Type GetType(ModuleReader module)
 			{
-				return type ?? (type = module.ResolveExportedType(index));
+				// guard against circular type forwarding
+				if (type == MarkerType.Pinned)
+				{
+					TypeName typeName = module.GetTypeName(module.ExportedType.records[index].TypeNamespace, module.ExportedType.records[index].TypeName);
+					return module.universe.GetMissingTypeOrThrow(module, module, null, typeName).SetCyclicTypeForwarder();
+				}
+				else if (type == null)
+				{
+					type = MarkerType.Pinned;
+					type = module.ResolveExportedType(index);
+				}
+				return type;
 			}
 		}
 
@@ -101,6 +112,10 @@ namespace IKVM.Reflection.Reader
 			this.stream = universe != null && universe.MetadataOnly ? null : stream;
 			this.location = location;
 			Read(stream, mapped);
+			if (universe != null && universe.WindowsRuntimeProjection && imageRuntimeVersion.StartsWith("WindowsRuntime ", StringComparison.Ordinal))
+			{
+				WindowsRuntimeProjection.Patch(this, strings, ref imageRuntimeVersion, ref blobHeap);
+			}
 			if (assembly == null && AssemblyTable.records.Length != 0)
 			{
 				assembly = new AssemblyReader(location, this);
@@ -511,35 +526,16 @@ namespace IKVM.Reflection.Reader
 		private Assembly ResolveAssemblyRefImpl(ref AssemblyRefTable.Record rec)
 		{
 			const int PublicKey = 0x0001;
-			string name = String.Format("{0}, Version={1}.{2}.{3}.{4}, Culture={5}, {6}={7}",
+			string name = AssemblyName.GetFullName(
 				GetString(rec.Name),
 				rec.MajorVersion,
 				rec.MinorVersion,
 				rec.BuildNumber,
 				rec.RevisionNumber,
 				rec.Culture == 0 ? "neutral" : GetString(rec.Culture),
-				(rec.Flags & PublicKey) == 0 ? "PublicKeyToken" : "PublicKey",
-				PublicKeyOrTokenToString(rec.PublicKeyOrToken));
+				rec.PublicKeyOrToken == 0 ? Empty<byte>.Array : (rec.Flags & PublicKey) == 0 ? GetBlobCopy(rec.PublicKeyOrToken) : AssemblyName.ComputePublicKeyToken(GetBlobCopy(rec.PublicKeyOrToken)),
+				rec.Flags);
 			return universe.Load(name, this, true);
-		}
-
-		private string PublicKeyOrTokenToString(int publicKeyOrToken)
-		{
-			if (publicKeyOrToken == 0)
-			{
-				return "null";
-			}
-			ByteReader br = GetBlob(publicKeyOrToken);
-			if (br.Length == 0)
-			{
-				return "null";
-			}
-			StringBuilder sb = new StringBuilder(br.Length * 2);
-			while (br.Length > 0)
-			{
-				sb.AppendFormat("{0:x2}", br.ReadByte());
-			}
-			return sb.ToString();
 		}
 
 		public override Guid ModuleVersionId

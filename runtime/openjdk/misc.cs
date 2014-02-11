@@ -134,6 +134,34 @@ static class Java_java_util_zip_ClassStubZipEntry
 	}
 }
 
+static class Java_sun_awt_image_ByteComponentRaster
+{
+	public static void initIDs()
+	{
+	}
+}
+
+static class Java_sun_awt_image_BytePackedRaster
+{
+	public static void initIDs()
+	{
+	}
+}
+
+static class Java_sun_awt_image_IntegerComponentRaster
+{
+	public static void initIDs()
+	{
+	}
+}
+
+static class Java_sun_awt_image_ShortComponentRaster
+{
+	public static void initIDs()
+	{
+	}
+}
+
 static class Java_sun_awt_FontDescriptor
 {
 	public static void initIDs()
@@ -213,14 +241,6 @@ static class Java_sun_nio_fs_NetPath
 			throw new java.nio.file.FileSystemException(path, null, x.Message);
 		}
 #endif
-	}
-}
-
-static class Java_sun_rmi_server_MarshalInputStream
-{
-	public static object latestUserDefinedLoader()
-	{
-		return Java_java_io_ObjectInputStream.latestUserDefinedLoader();
 	}
 }
 
