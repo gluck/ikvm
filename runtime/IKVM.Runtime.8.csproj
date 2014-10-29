@@ -95,6 +95,7 @@
     <Compile Include="BigEndianBinaryReader.cs">
       <SubType>Code</SubType>
     </Compile>
+    <Compile Include="Boxer.cs" />
     <Compile Include="ByteCode.cs">
       <SubType>Code</SubType>
     </Compile>
@@ -143,6 +144,7 @@
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="JsrInliner.cs" />
+    <Compile Include="LambdaMetafactory.cs" />
     <Compile Include="LocalVars.cs" />
     <Compile Include="MemberWrapper.cs">
       <SubType>Code</SubType>
@@ -163,6 +165,7 @@
     <Compile Include="openjdk\sun.nio.ch.cs" />
     <Compile Include="openjdk\sun.reflect.cs" />
     <Compile Include="openjdk\sun.security.krb5.cs" />
+    <Compile Include="openjdk\sun.util.locale.provider.cs" />
     <Compile Include="PassiveWeakDictionary.cs" />
     <Compile Include="profiler.cs">
       <SubType>Code</SubType>

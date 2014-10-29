@@ -455,6 +455,11 @@ namespace IKVM.Internal
 			{
 				get { return true; }
 			}
+
+			internal override MethodParametersEntry[] GetMethodParameters(MethodWrapper mw)
+			{
+				return DeclaringTypeWrapper.GetMethodParameters(DeclaringTypeWrapper.GetMethodWrapper(mw.Name, mw.Signature, false));
+			}
 		}
 
 		private class DynamicOnlyMethodWrapper : MethodWrapper
@@ -2784,6 +2789,38 @@ namespace IKVM.Internal
 			finished = true;
 		}
 
+		internal override MethodParametersEntry[] GetMethodParameters(MethodWrapper mw)
+		{
+			MethodBase mb = mw.GetMethod();
+			if (mb == null)
+			{
+				return null;
+			}
+			ParameterInfo[] parameters = mb.GetParameters();
+			if (parameters.Length == 0)
+			{
+				return null;
+			}
+			MethodParametersEntry[] mp = new MethodParametersEntry[parameters.Length];
+			bool hasName = false;
+			for (int i = 0; i < mp.Length; i++)
+			{
+				string name = parameters[i].Name;
+				bool empty = String.IsNullOrEmpty(name);
+				if (empty)
+				{
+					name = "arg" + i;
+				}
+				mp[i].name = name;
+				hasName |= !empty;
+			}
+			if (!hasName)
+			{
+				return null;
+			}
+			return mp;
+		}
+
 #if !STATIC_COMPILER && !STUB_GENERATOR
 		internal override object[] GetDeclaredAnnotations()
 		{
@@ -2838,6 +2875,10 @@ namespace IKVM.Internal
 		// (i.e. injected into the assembly)
 		internal override bool IsPackageAccessibleFrom(TypeWrapper wrapper)
 		{
+			if (wrapper == DeclaringTypeWrapper)
+			{
+				return true;
+			}
 			if (!base.IsPackageAccessibleFrom(wrapper))
 			{
 				return false;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1995, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1995, 2013, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -43,11 +43,14 @@ import java.lang.ProcessBuilder.Redirect;
 import java.security.AccessController;
 import java.security.PrivilegedAction;
 import java.util.ArrayList;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import cli.System.AsyncCallback;
 import cli.System.IAsyncResult;
 import cli.System.Diagnostics.ProcessStartInfo;
+import cli.System.EventArgs;
+import cli.System.EventHandler;
 import cli.System.IO.FileAccess;
 import cli.System.IO.FileShare;
 import cli.System.IO.FileMode;
@@ -149,8 +152,17 @@ final class ProcessImpl extends Process {
 
             return new ProcessImpl(cmdarray, environment, dir,
                                    stdHandles, redirectErrorStream);
+        } catch (Throwable t) {
+            if (f0 != null)
+                f0.close();
+            if (f1 != null)
+                f1.close();
+            if (f2 != null)
+                f2.close();
+            throw t;
         } finally {
             // HACK prevent the File[In|Out]putStream objects from closing the streams
+            // (the System.IO.FileStream will eventually be closed explicitly or by its finalizer)
             if (f0 != null)
                 cli.System.GC.SuppressFinalize(f0);
             if (f1 != null)
@@ -454,6 +466,7 @@ final class ProcessImpl extends Process {
             throw new InterruptedException();
         return exitValue();
     }
+
     private static void waitForInterruptibly(cli.System.Diagnostics.Process handle) throws InterruptedException {
         // to be interruptable we have to use polling
         // (on .NET 2.0 WaitForExit is actually interruptible, but this isn't documented)
@@ -462,7 +475,53 @@ final class ProcessImpl extends Process {
             ;
     }
 
+    @Override
+    public boolean waitFor(long timeout, TimeUnit unit)
+        throws InterruptedException
+    {
+        if (handle.get_HasExited()) return true;
+        if (timeout <= 0) return false;
+
+        long msTimeout = unit.toMillis(timeout);
+
+        waitForTimeoutInterruptibly(handle, msTimeout);
+        if (Thread.interrupted())
+            throw new InterruptedException();
+        return handle.get_HasExited();
+    }
+
+    private static void waitForTimeoutInterruptibly(
+        cli.System.Diagnostics.Process handle, long timeout) {
+        long now = System.currentTimeMillis();
+        long exp = now + timeout;
+        if (exp < now) {
+            // if we overflowed, just wait for a really long time
+            exp = Long.MAX_VALUE;
+        }
+        Thread current = Thread.currentThread();
+        for (;;) {
+            if (current.isInterrupted()) {
+                return;
+            }
+            // wait for a maximum of 100 ms to be interruptible
+            if (handle.WaitForExit((int)Math.min(100, exp - now))) {
+                return;
+            }
+            now = System.currentTimeMillis();
+            if (now >= exp) {
+                return;
+            }
+        }
+    }
+
     public void destroy() { terminateProcess(handle); }
+
+    @Override
+    public Process destroyForcibly() {
+        destroy();
+        return this;
+    }
+
     private static void terminateProcess(cli.System.Diagnostics.Process handle) {
         try {
             if (false) throw new cli.System.ComponentModel.Win32Exception();
@@ -473,10 +532,21 @@ final class ProcessImpl extends Process {
         }
     }
 
+    @Override
+    public boolean isAlive() {
+        return isProcessAlive(handle);
+    }
+
+    private static boolean isProcessAlive(cli.System.Diagnostics.Process handle) {
+        return !handle.get_HasExited();
+    }
+
     /**
      * Create a process using the win32 function CreateProcess.
+     * The method is synchronized due to MS kb315939 problem.
+     * All native handles should restore the inherit flag at the end of call.
      *
-     * @param cmdstr the Windows commandline
+     * @param cmdstr the Windows command line
      * @param envblock NUL-separated, double-NUL-terminated list of
      *        environment strings in VAR=VALUE form
      * @param dir the working directory of the process, or null if
@@ -531,6 +601,27 @@ final class ProcessImpl extends Process {
             throw new IOException(x1.getMessage());
         } catch (cli.System.InvalidOperationException x2) {
             throw new IOException(x2.getMessage());
+        }
+
+        // if any of the handles is redirected to/from a file,
+        // we need to close the files as soon as the process exits
+        if (stdHandles[0] instanceof FileStream
+            || stdHandles[1] instanceof FileStream
+            || stdHandles[2] instanceof FileStream) {
+            final Stream s0 = stdHandles[0];
+            final Stream s1 = stdHandles[1];
+            final Stream s2 = stdHandles[2];
+            proc.set_EnableRaisingEvents(true);
+            proc.add_Exited(new EventHandler(new EventHandler.Method() {
+                public void Invoke(Object sender, EventArgs e) {
+                    if (s0 instanceof FileStream)
+                        s0.Close();
+                    if (s1 instanceof FileStream)
+                        s1.Close();
+                    if (s2 instanceof FileStream)
+                        s2.Close();
+                }
+            }));
         }
         
         Stream stdin = proc.get_StandardInput().get_BaseStream();

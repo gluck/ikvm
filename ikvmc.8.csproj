@@ -91,6 +91,7 @@
     <Compile Include="runtime\BigEndianBinaryReader.cs">
       <SubType>Code</SubType>
     </Compile>
+    <Compile Include="runtime\Boxer.cs" />
     <Compile Include="runtime\ByteCode.cs">
       <SubType>Code</SubType>
     </Compile>
@@ -119,6 +120,7 @@
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="runtime\JsrInliner.cs" />
+    <Compile Include="runtime\LambdaMetafactory.cs" />
     <Compile Include="runtime\LocalVars.cs" />
     <Compile Include="runtime\MemberWrapper.cs">
       <SubType>Code</SubType>

@@ -1,5 +1,5 @@
 /*
-  Copyright (C) 2002-2012 Jeroen Frijters
+  Copyright (C) 2002-2014 Jeroen Frijters
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -164,7 +164,7 @@ sealed class BigEndianBinaryReader
 						case 0:
 							if(c == 0)
 							{
-								throw new ClassFormatError("{0} (Illegal UTF8 string in constant pool)", classFile);
+								goto default;
 							}
 							break;
 						case 1: case 2: case 3: case 4: case 5: case 6: case 7:
@@ -175,9 +175,13 @@ sealed class BigEndianBinaryReader
 							char2 = buf[pos + ++i];
 							if((char2 & 0xc0) != 0x80 || i >= len)
 							{
-								throw new ClassFormatError("{0} (Illegal UTF8 string in constant pool)", classFile);
+								goto default;
 							}
 							c = (((c & 0x1F) << 6) | (char2 & 0x3F));
+							if(c < 0x80 && c != 0)
+							{
+								goto default;
+							}
 							break;
 						case 14:
 							// 1110 xxxx  10xx xxxx  10xx xxxx
@@ -185,12 +189,16 @@ sealed class BigEndianBinaryReader
 							char3 = buf[pos + ++i];
 							if((char2 & 0xc0) != 0x80 || (char3 & 0xc0) != 0x80 || i >= len)
 							{
-								throw new ClassFormatError("{0} (Illegal UTF8 string in constant pool)", classFile);
+								goto default;
 							}
 							c = (((c & 0x0F) << 12) | ((char2 & 0x3F) << 6) | ((char3 & 0x3F) << 0));
+							if(c < 0x800)
+							{
+								goto default;
+							}
 							break;
 						default:
-							throw new ClassFormatError("{0} (Illegal UTF8 string in constant pool)", classFile);
+							throw new ClassFormatError("Illegal UTF8 string in constant pool in class file {0}", classFile);
 					}
 					ch[l++] = (char)c;
 				}
@@ -223,5 +231,12 @@ sealed class BigEndianBinaryReader
 		uint i = (uint)((buf[pos] << 24) + (buf[pos + 1] << 16) + (buf[pos + 2] << 8) + buf[pos + 3]);
 		pos += 4;
 		return i;
+	}
+
+	internal byte[] ToArray()
+	{
+		byte[] res = new byte[end - pos];
+		Buffer.BlockCopy(buf, pos, res, 0, res.Length);
+		return res;
 	}
 }

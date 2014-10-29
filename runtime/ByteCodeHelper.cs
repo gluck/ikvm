@@ -1,5 +1,5 @@
 /*
-  Copyright (C) 2002-2013 Jeroen Frijters
+  Copyright (C) 2002-2014 Jeroen Frijters
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -218,7 +218,11 @@ namespace IKVM.Runtime
 			{
 				TypeWrapper context = TypeWrapper.FromClass(callerId.getCallerClass());
 				TypeWrapper wrapper = ClassLoaderWrapper.FromCallerID(callerId).LoadClassByDottedName(clazz);
-				callerId.getCallerClassLoader().checkPackageAccess(wrapper.ClassObject, callerId.getCallerClass().pd);
+				java.lang.ClassLoader loader = callerId.getCallerClassLoader();
+				if(loader != null)
+				{
+					loader.checkPackageAccess(wrapper.ClassObject, callerId.getCallerClass().pd);
+				}
 				if(!wrapper.IsAccessibleFrom(context))
 				{
 					throw new java.lang.IllegalAccessError("Try to access class " + wrapper.Name + " from class " + context.Name);
@@ -318,12 +322,6 @@ namespace IKVM.Runtime
 #if FIRST_PASS
 			return null;
 #else
-			java.lang.invoke.MethodHandles.Lookup lookup = new java.lang.invoke.MethodHandles.Lookup(callerID.getCallerClass(),
-				java.lang.invoke.MethodHandles.Lookup.PUBLIC |
-				java.lang.invoke.MethodHandles.Lookup.PRIVATE |
-				java.lang.invoke.MethodHandles.Lookup.PROTECTED |
-				java.lang.invoke.MethodHandles.Lookup.PACKAGE,
-				true);
 			java.lang.Class refc = LoadTypeWrapper(clazz, callerID).ClassObject;
 			try
 			{
@@ -334,46 +332,33 @@ namespace IKVM.Runtime
 					case ClassFile.RefKind.getField:
 					case ClassFile.RefKind.putField:
 						java.lang.Class type = ClassLoaderWrapper.FromCallerID(callerID).FieldTypeWrapperFromSig(sig).ClassObject;
-						switch ((ClassFile.RefKind)kind)
-						{
-							case ClassFile.RefKind.getStatic:
-								return lookup.findStaticGetter(refc, name, type);
-							case ClassFile.RefKind.putStatic:
-								return lookup.findStaticSetter(refc, name, type);
-							case ClassFile.RefKind.getField:
-								return lookup.findGetter(refc, name, type);
-							case ClassFile.RefKind.putField:
-								return lookup.findSetter(refc, name, type);
-							default:
-								throw new InvalidOperationException();
-						}
+						return java.lang.invoke.MethodHandleNatives.linkMethodHandleConstant(callerID.getCallerClass(), kind, refc, name, type);
 					default:
 						java.lang.invoke.MethodType mt = null;
 						DynamicLoadMethodType(ref mt, sig, callerID);
-						switch ((ClassFile.RefKind)kind)
+						// HACK linkMethodHandleConstant is broken for MethodHandle.invoke[Exact]
+						if (kind == (int)ClassFile.RefKind.invokeVirtual && refc == CoreClasses.java.lang.invoke.MethodHandle.Wrapper.ClassObject)
 						{
-							case ClassFile.RefKind.invokeInterface:
-								return lookup.findVirtual(refc, name, mt);
-							case ClassFile.RefKind.invokeSpecial:
-								return lookup.findSpecial(refc, name, mt, callerID.getCallerClass());
-							case ClassFile.RefKind.invokeStatic:
-								return lookup.findStatic(refc, name, mt);
-							case ClassFile.RefKind.invokeVirtual:
-								return lookup.findVirtual(refc, name, mt);
-							case ClassFile.RefKind.newInvokeSpecial:
-								return lookup.findConstructor(refc, mt);
-							default:
-								throw new InvalidOperationException();
+							switch (name)
+							{
+								case "invokeExact":
+									return java.lang.invoke.MethodHandles.exactInvoker(mt);
+								case "invoke":
+									return java.lang.invoke.MethodHandles.invoker(mt);
+							}
 						}
+						java.lang.Class caller = callerID.getCallerClass();
+						DynamicTypeWrapper.FinishContext.HostCallerID hostCallerID = callerID as DynamicTypeWrapper.FinishContext.HostCallerID;
+						if (hostCallerID != null)
+						{
+							caller = hostCallerID.host.ClassObject;
+						}
+						return java.lang.invoke.MethodHandleNatives.linkMethodHandleConstant(caller, kind, refc, name, mt);
 				}
 			}
 			catch (RetargetableJavaException x)
 			{
 				throw x.ToJava();
-			}
-			catch (java.lang.ReflectiveOperationException x)
-			{
-				throw new java.lang.IncompatibleClassChangeError().initCause(x);
 			}
 #endif
 		}
@@ -388,8 +373,7 @@ namespace IKVM.Runtime
 			try
 			{
 				java.lang.invoke.MethodHandle mh = DynamicLoadMethodHandleImpl(kind, clazz, name, sig, callerID);
-				return mh.vmtarget as T
-					?? (T)mh.asType(MethodHandleUtil.GetDelegateMethodType(typeof(T))).vmtarget;
+				return GetDelegateForInvokeExact<T>(mh.asType(MethodHandleUtil.GetDelegateMethodType(typeof(T))));
 			}
 			catch (java.lang.IncompatibleClassChangeError x)
 			{
@@ -883,10 +867,10 @@ namespace IKVM.Runtime
 #if FIRST_PASS
 			return null;
 #else
-			T del = h.vmtarget as T;
+			T del = h._invokeExactDelegate as T;
 			if (del == null)
 			{
-				throw new global::java.lang.invoke.WrongMethodTypeException();
+				del = MethodHandleUtil.GetDelegateForInvokeExact<T>(h);
 			}
 			return del;
 #endif
@@ -898,11 +882,12 @@ namespace IKVM.Runtime
 #if FIRST_PASS
 			return null;
 #else
-			if (cache.type == h.type() && cache.del != null)
+			T del;
+			if (cache.Type == h.type() && (del = (h.isVarargsCollector() ? cache.varArg : cache.fixedArg)) != null)
 			{
-				return cache.del;
+				return del;
 			}
-			T del = h.vmtarget as T;
+			del = h.form.vmentry.vmtarget as T;
 			if (del == null)
 			{
 				global::java.lang.invoke.MethodHandle adapter = global::java.lang.invoke.MethodHandles.exactInvoker(h.type());
@@ -910,11 +895,34 @@ namespace IKVM.Runtime
 				{
 					adapter = adapter.asVarargsCollector(h.type().parameterType(h.type().parameterCount() - 1));
 				}
-				del = (T)adapter.asType(MethodHandleUtil.GetDelegateMethodType(typeof(T))).vmtarget;
-				if (Interlocked.CompareExchange(ref cache.type, h.type(), null) == null)
+				adapter = adapter.asType(MethodHandleUtil.GetDelegateMethodType(typeof(T)));
+				del = GetDelegateForInvokeExact<T>(adapter);
+				if (cache.TrySetType(h.type()))
 				{
-					cache.del = del;
+					if (h.isVarargsCollector())
+					{
+						cache.varArg = del;
+					}
+					else
+					{
+						cache.fixedArg = del;
+					}
 				}
+			}
+			return del;
+#endif
+		}
+
+		public static T GetDelegateForInvokeBasic<T>(java.lang.invoke.MethodHandle h)
+			where T : class
+		{
+#if FIRST_PASS
+			return null;
+#else
+			T del = h.form.vmentry.vmtarget as T;
+			if (del == null)
+			{
+				del = MethodHandleUtil.GetVoidAdapter(h.form.vmentry) as T;
 			}
 			return del;
 #endif
@@ -930,31 +938,24 @@ namespace IKVM.Runtime
 #endif
 		}
 
-#if !FIRST_PASS
-		sealed class ConstantMethodHandle : java.lang.invoke.MethodHandle
-		{
-			internal ConstantMethodHandle(Delegate del)
-				: base(MethodHandleUtil.GetDelegateMethodType(del.GetType()))
-			{
-				this.vmtarget = del;
-			}
-		}
-#endif
-
-		public static java.lang.invoke.MethodHandle MethodHandleFromDelegate(Delegate del)
-		{
-#if FIRST_PASS
-			return null;
-#else
-			return new ConstantMethodHandle(del);
-#endif
-		}
-
 		[HideFromJava]
 		public static void LinkIndyCallSite<T>(ref IndyCallSite<T> site, java.lang.invoke.CallSite cs, Exception x)
 			where T : class // Delegate
 		{
 #if !FIRST_PASS
+			// when a CallSite is first constructed, it doesn't call MethodHandleNatives.setCallSiteTargetNormal(),
+			// so we have to check if we need to initialize it here (i.e. attach an IndyCallSite<T> to it)
+			if (cs != null)
+			{
+				if (cs.ics == null)
+				{
+					Java_java_lang_invoke_MethodHandleNatives.InitializeCallSite(cs);
+				}
+				lock (cs.ics)
+				{
+					cs.ics.SetTarget(cs.target);
+				}
+			}
 			IndyCallSite<T> ics;
 			if (x != null || cs == null || (ics = cs.ics as IndyCallSite<T>) == null)
 			{
@@ -962,14 +963,17 @@ namespace IKVM.Runtime
 					? (Exception)new java.lang.ClassCastException("bootstrap method failed to produce a CallSite")
 					: new java.lang.invoke.WrongMethodTypeException()), MapFlags.None);
 				java.lang.invoke.MethodType type = LoadMethodType<T>();
-				ics = new IndyCallSite<T>((T)
+				java.lang.invoke.MethodHandle exc = x is java.lang.BootstrapMethodError
+					? java.lang.invoke.MethodHandles.constant(typeof(java.lang.BootstrapMethodError), x)
+					: java.lang.invoke.MethodHandles.publicLookup().findConstructor(typeof(java.lang.BootstrapMethodError), java.lang.invoke.MethodType.methodType(typeof(void), typeof(string), typeof(Exception)))
+						.bindTo("call site initialization exception").bindTo(x);
+				ics = new IndyCallSite<T>();
+				((IIndyCallSite)ics).SetTarget(
 					java.lang.invoke.MethodHandles.dropArguments(
 						java.lang.invoke.MethodHandles.foldArguments(
 							java.lang.invoke.MethodHandles.throwException(type.returnType(), typeof(java.lang.BootstrapMethodError)),
-								new ConstantMethodHandle((MH<Exception, java.lang.BootstrapMethodError>)CreateBootstrapException).bindTo(x)),
-						0, type.parameterArray())
-					.vmtarget,
-					false);
+								exc),
+						0, type.parameterArray()));
 			}
 			IndyCallSite<T> curr = site;
 			if (curr.IsBootstrap)
@@ -978,24 +982,15 @@ namespace IKVM.Runtime
 			}
 #endif
 		}
+	}
 
-#if !FIRST_PASS
-		[HideFromJava]
-		private static java.lang.BootstrapMethodError CreateBootstrapException(Exception x)
-		{
-			if (x is java.lang.BootstrapMethodError)
-			{
-				return (java.lang.BootstrapMethodError)x;
-			}
-			return new java.lang.BootstrapMethodError("call site initialization exception", x);
-		}
-#endif
+	interface IIndyCallSite
+	{
+		void SetTarget(java.lang.invoke.MethodHandle mh);
 	}
 
 	public sealed class IndyCallSite<T>
-#if !FIRST_PASS
-		: java.lang.invoke.CallSite.IndyCallSite
-#endif
+		: IIndyCallSite
 		where T : class // Delegate
 	{
 		internal readonly bool IsBootstrap;
@@ -1011,13 +1006,13 @@ namespace IKVM.Runtime
 			this.target = target;
 		}
 
-#if !FIRST_PASS
-		void java.lang.invoke.CallSite.IndyCallSite.setTarget(object target)
+		void IIndyCallSite.SetTarget(java.lang.invoke.MethodHandle mh)
 		{
-			this.target = (T)target;
-		}
+#if !FIRST_PASS
+			target = ByteCodeHelper.GetDelegateForInvokeExact<T>(mh);
 #endif
-
+		}
+		
 		public static IndyCallSite<T> CreateBootstrap(T bootstrap)
 		{
 			return new IndyCallSite<T>(bootstrap, true);
@@ -1032,8 +1027,38 @@ namespace IKVM.Runtime
 	public struct InvokeCache<T>
 		where T : class
 	{
-		internal global::java.lang.invoke.MethodType type;
-		internal T del;
+#if CLASSGC
+		private WeakReference weakRef;
+
+		internal java.lang.invoke.MethodType Type
+		{
+			get { return weakRef == null ? null : (java.lang.invoke.MethodType)weakRef.Target; }
+		}
+
+		internal bool TrySetType(java.lang.invoke.MethodType newType)
+		{
+			if (weakRef == null)
+			{
+				return Interlocked.CompareExchange(ref weakRef, new WeakReference(newType), null) == null;
+			}
+			return Type == newType;
+		}
+#else
+		private java.lang.invoke.MethodType type;
+
+		internal java.lang.invoke.MethodType Type
+		{
+			get { return type; }
+		}
+
+		internal bool TrySetType(java.lang.invoke.MethodType newType)
+		{
+			Interlocked.CompareExchange(ref type, newType, null);
+			return type == newType;
+		}
+#endif
+		internal T fixedArg;
+		internal T varArg;
 	}
 
 	[StructLayout(LayoutKind.Explicit)]
@@ -1121,4 +1146,9 @@ namespace IKVM.Runtime
 	public delegate TResult MH<T1, T2, T3, T4, T5, T6, TResult>(T1 t1, T2 t2, T3 t3, T4 t4, T5 t5, T6 t6);
 	public delegate TResult MH<T1, T2, T3, T4, T5, T6, T7, TResult>(T1 t1, T2 t2, T3 t3, T4 t4, T5 t5, T6 t6, T7 t7);
 	public delegate TResult MH<T1, T2, T3, T4, T5, T6, T7, T8, TResult>(T1 t1, T2 t2, T3 t3, T4 t4, T5 t5, T6 t6, T7 t7, T8 t8);
+
+	public static class LiveObjectHolder<T>
+	{
+		public static object[] values;
+	}
 }

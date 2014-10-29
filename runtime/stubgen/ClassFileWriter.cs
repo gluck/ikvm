@@ -72,6 +72,11 @@ namespace IKVM.StubGen
 			stream.WriteByte(b);
 		}
 
+		public void WriteBytes(byte[] data)
+		{
+			stream.Write(data, 0, data.Length);
+		}
+
 		public void WriteUtf8(string str)
 		{
 			byte[] buf = new byte[str.Length * 3 + 1];
@@ -728,6 +733,24 @@ namespace IKVM.StubGen
 		}
 	}
 
+	sealed class RuntimeVisibleTypeAnnotationsAttribute : ClassFileAttribute
+	{
+		private readonly byte[] data;
+
+		internal RuntimeVisibleTypeAnnotationsAttribute(ClassFileWriter classFile, byte[] data)
+			: base(classFile.AddUtf8("RuntimeVisibleTypeAnnotations"))
+		{
+			this.data = data;
+		}
+
+		public override void Write(BigEndianStream bes)
+		{
+			base.Write(bes);
+			bes.WriteUInt32((uint)data.Length);
+			bes.WriteBytes(data);
+		}
+	}
+
 	sealed class AnnotationDefaultClassFileAttribute : ClassFileAttribute
 	{
 		private ClassFileWriter classFile;
@@ -834,23 +857,31 @@ namespace IKVM.StubGen
 	{
 		private readonly ClassFileWriter classFile;
 		private readonly ushort[] names;
+		private readonly ushort[] flags;
 
-		internal MethodParametersAttribute(ClassFileWriter classFile, ushort[] names)
+		internal MethodParametersAttribute(ClassFileWriter classFile, ushort[] names, ushort[] flags)
 			: base(classFile.AddUtf8("MethodParameters"))
 		{
 			this.classFile = classFile;
 			this.names = names;
+			this.flags = flags;
 		}
 
 		public override void Write(BigEndianStream bes)
 		{
 			base.Write(bes);
+			if (flags == null || names == null || flags.Length != names.Length)
+			{
+				// write a malformed MethodParameters attribute
+				bes.WriteUInt32(0);
+				return;
+			}
 			bes.WriteUInt32((uint)(1 + names.Length * 4));
 			bes.WriteByte((byte)names.Length);
-			foreach (ushort idx in names)
+			for (int i = 0; i < names.Length; i++)
 			{
-				bes.WriteUInt16(idx);
-				bes.WriteUInt16(0);
+				bes.WriteUInt16(names[i]);
+				bes.WriteUInt16(flags[i]);
 			}
 		}
 	}

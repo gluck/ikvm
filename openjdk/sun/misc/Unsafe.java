@@ -1,5 +1,5 @@
 /*
-  Copyright (C) 2006-2012 Jeroen Frijters
+  Copyright (C) 2006-2014 Jeroen Frijters
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -49,7 +49,7 @@ public final class Unsafe
     @sun.reflect.CallerSensitive
     public static Unsafe getUnsafe()
     {
-        if(ikvm.internal.CallerID.getCallerID().getCallerClassLoader() != null)
+        if(!VM.isSystemDomainLoader(ikvm.internal.CallerID.getCallerID().getCallerClassLoader()))
         {
             throw new SecurityException("Unsafe");
         }
@@ -59,7 +59,7 @@ public final class Unsafe
     // this is the intrinsified version of objectFieldOffset(XXX.class.getDeclaredField("xxx"))
     public long objectFieldOffset(Class c, String field)
     {
-        return fieldOffset(ReflectHelper.createFieldAndMakeAccessible(c, field));
+        return allocateUnsafeFieldId(ReflectHelper.createFieldAndMakeAccessible(c, field));
     }
 
     // NOTE we have a really lame (and slow) implementation!
@@ -69,11 +69,16 @@ public final class Unsafe
         {
             throw new IllegalArgumentException();
         }
-        return fieldOffset(field);
+        return allocateUnsafeFieldId(field);
     }
 
     @Deprecated
     public int fieldOffset(Field original)
+    {
+        return allocateUnsafeFieldId(original);
+    }
+    
+    static int allocateUnsafeFieldId(Field original)
     {
         Field copy = ReflectHelper.copyFieldAndMakeAccessible(original);
         synchronized(fields)
@@ -408,6 +413,11 @@ public final class Unsafe
         }
     }
 
+    public void putBooleanVolatile(Object obj, long offset, boolean newValue)
+    {
+        putBoolean(obj, offset, newValue);
+    }
+
     public boolean getBoolean(Object obj, long offset)
     {
         if (obj instanceof boolean[])
@@ -425,6 +435,11 @@ public final class Unsafe
                 throw (InternalError)new InternalError().initCause(x);
             }
         }
+    }
+
+    public boolean getBooleanVolatile(Object obj, long offset)
+    {
+        return getBoolean(obj, offset);
     }
 
     public void putByte(Object obj, long offset, byte newValue)
@@ -446,6 +461,11 @@ public final class Unsafe
         }
     }
 
+    public void putByteVolatile(Object obj, long offset, byte newValue)
+    {
+        putByte(obj, offset, newValue);
+    }
+
     public byte getByte(Object obj, long offset)
     {
         if (obj instanceof byte[])
@@ -463,6 +483,11 @@ public final class Unsafe
                 throw (InternalError)new InternalError().initCause(x);
             }
         }
+    }
+
+    public byte getByteVolatile(Object obj, long offset)
+    {
+        return getByte(obj, offset);
     }
 
     public void putChar(Object obj, long offset, char newValue)
@@ -484,6 +509,11 @@ public final class Unsafe
         }
     }
 
+    public void putCharVolatile(Object obj, long offset, char newValue)
+    {
+        putChar(obj, offset, newValue);
+    }
+
     public char getChar(Object obj, long offset)
     {
         if (obj instanceof char[])
@@ -501,6 +531,11 @@ public final class Unsafe
                 throw (InternalError)new InternalError().initCause(x);
             }
         }
+    }
+
+    public char getCharVolatile(Object obj, long offset)
+    {
+        return getChar(obj, offset);
     }
 
     public void putShort(Object obj, long offset, short newValue)
@@ -522,6 +557,11 @@ public final class Unsafe
         }
     }
 
+    public void putShortVolatile(Object obj, long offset, short newValue)
+    {
+        putShort(obj, offset, newValue);
+    }
+
     public short getShort(Object obj, long offset)
     {
         if (obj instanceof short[])
@@ -539,6 +579,11 @@ public final class Unsafe
                 throw (InternalError)new InternalError().initCause(x);
             }
         }
+    }
+
+    public short getShortVolatile(Object obj, long offset)
+    {
+        return getShort(obj, offset);
     }
 
     public void putInt(Object obj, long offset, int newValue)
@@ -598,6 +643,11 @@ public final class Unsafe
         }
     }
 
+    public void putFloatVolatile(Object obj, long offset, float newValue)
+    {
+        putFloat(obj, offset, newValue);
+    }
+
     public float getFloat(Object obj, long offset)
     {
         if (obj instanceof float[])
@@ -615,6 +665,11 @@ public final class Unsafe
                 throw (InternalError)new InternalError().initCause(x);
             }
         }
+    }
+
+    public float getFloatVolatile(Object obj, long offset)
+    {
+        return getFloat(obj, offset);
     }
 
     public void putLong(Object obj, long offset, long newValue)
@@ -674,6 +729,14 @@ public final class Unsafe
         }
     }
 
+    public void putDoubleVolatile(Object obj, long offset, double newValue)
+    {
+        synchronized (this)
+        {
+            putDouble(obj, offset, newValue);
+        }
+    }
+
     public double getDouble(Object obj, long offset)
     {
         if (obj instanceof double[])
@@ -690,6 +753,14 @@ public final class Unsafe
             {
                 throw (InternalError)new InternalError().initCause(x);
             }
+        }
+    }
+
+    public double getDoubleVolatile(Object obj, long offset)
+    {
+        synchronized (this)
+        {
+            return getDouble(obj, offset);
         }
     }
 
@@ -1122,6 +1193,10 @@ public final class Unsafe
         }
         else
         {
+            if (time == 0)
+            {
+                time = Long.MAX_VALUE;
+            }
             java.util.concurrent.locks.LockSupport.parkNanos(time);
         }
     }
@@ -1136,7 +1211,15 @@ public final class Unsafe
         return null;
     }
 
+    public native boolean shouldBeInitialized(Class<?> c);
+
     public native Class defineClass(String name, byte[] buf, int offset, int length, ClassLoader cl, ProtectionDomain pd);
+
+    @Deprecated
+    @sun.reflect.CallerSensitive
+    public native Class defineClass(String name, byte[] b, int off, int len);
+
+    public native Class defineAnonymousClass(Class hostClass, byte[] data, Object[] cpPatches);
 
     public void monitorEnter(Object o)
     {
@@ -1151,5 +1234,80 @@ public final class Unsafe
     public boolean tryMonitorEnter(Object o)
     {
         return cli.System.Threading.Monitor.TryEnter(o);
+    }
+
+    public final int getAndAddInt(Object o, long offset, int delta)
+    {
+        for (;;)
+        {
+            int value = getIntVolatile(o, offset);
+            if (compareAndSwapInt(o, offset, value, value + delta))
+            {
+                return value;
+            }
+        }
+    }
+
+    public final long getAndAddLong(Object o, long offset, long delta)
+    {
+        for (;;)
+        {
+            long value = getLongVolatile(o, offset);
+            if (compareAndSwapLong(o, offset, value, value + delta))
+            {
+                return value;
+            }
+        }
+    }
+
+    public final int getAndSetInt(Object o, long offset, int newValue)
+    {
+        for (;;)
+        {
+            int value = getIntVolatile(o, offset);
+            if (compareAndSwapInt(o, offset, value, newValue))
+            {
+                return value;
+            }
+        }
+    }
+
+    public final long getAndSetLong(Object o, long offset, long newValue)
+    {
+        for (;;)
+        {
+            long value = getLongVolatile(o, offset);
+            if (compareAndSwapLong(o, offset, value, newValue))
+            {
+                return value;
+            }
+        }
+    }
+
+    public final Object getAndSetObject(Object o, long offset, Object newValue)
+    {
+        for (;;)
+        {
+            Object value = getObjectVolatile(o, offset);
+            if (compareAndSwapObject(o, offset, value, newValue))
+            {
+                return value;
+            }
+        }
+    }
+
+    public void loadFence()
+    {
+        cli.System.Threading.Thread.MemoryBarrier();
+    }
+
+    public void storeFence()
+    {
+        cli.System.Threading.Thread.MemoryBarrier();
+    }
+
+    public void fullFence()
+    {
+        cli.System.Threading.Thread.MemoryBarrier();
     }
 }

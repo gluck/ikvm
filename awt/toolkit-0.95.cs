@@ -127,6 +127,19 @@ namespace ikvm.awt
             }
         }
 
+		private const int WM_MOUSEACTIVATE = 0x0021;
+		private const int MA_NOACTIVATE = 0x0003;
+
+		protected override void WndProc(ref Message m)
+		{
+			if (!focusableWindow && m.Msg == WM_MOUSEACTIVATE)
+			{
+				m.Result = (IntPtr)MA_NOACTIVATE;
+				return;
+			}
+			base.WndProc(ref m);
+		}
+
 		protected override void OnPaintBackground(PaintEventArgs e)
 		{
 			NetComponentPeer peer = NetComponentPeer.FromControl(this);
@@ -566,19 +579,6 @@ namespace ikvm.awt
         {
             //we return the default ColorModel because this produce the fewest problems with convertions
             return java.awt.image.ColorModel.getRGBdefault();
-        }
-
-        [Obsolete]
-        public override string[] getFontList()
-        {
-            // This method is deprecated and Sun's JDK only returns these fonts as well
-            return new string[] { "Dialog", "SansSerif", "Serif", "Monospaced", "DialogInput" };
-        }
-
-        [Obsolete]
-        public override java.awt.FontMetrics getFontMetrics(java.awt.Font font)
-        {
-            return sun.font.FontDesignMetrics.getMetrics(font);
         }
 
         public override void sync()
@@ -1030,6 +1030,11 @@ namespace ikvm.awt
 		public override bool areExtraMouseButtonsEnabled()
 		{
 			return true;
+		}
+
+		public override java.awt.peer.FramePeer createLightweightFrame(sun.awt.LightweightFrame lf)
+		{
+			throw new NotImplementedException();
 		}
 	}
 
@@ -4425,6 +4430,11 @@ namespace ikvm.awt
 		{
 			return new MyForm(_insets);
 		}
+
+		public void emulateActivation(bool b)
+		{
+			throw new NotImplementedException();
+		}
     }
 
     sealed class NetDialogPeer : NetWindowPeer, java.awt.peer.DialogPeer
@@ -5303,7 +5313,7 @@ namespace ikvm.awt
             {
                 return contents;
             }
-            return new NetClipboardTransferable(Clipboard.GetDataObject());
+            return new NetClipboardTransferable(NetToolkit.Invoke<IDataObject>(Clipboard.GetDataObject));
         }
     }
 
@@ -5617,6 +5627,11 @@ namespace ikvm.awt
         {
             throw new ikvm.@internal.NotYetImplementedError();
         }
-    }
+
+		protected internal override java.awt.Image platformImageBytesToImage(byte[] barr, long l)
+		{
+			throw new NotImplementedException();
+		}
+	}
 
 }

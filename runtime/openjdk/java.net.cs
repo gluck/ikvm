@@ -520,10 +520,13 @@ static class Java_java_net_NetworkInterface
 						scope = (int)addr.ScopeId;
 					}
 					java.net.Inet6Address ia6 = new java.net.Inet6Address();
-					ia6.ipaddress = addr.GetAddressBytes();
+					ia6._holder().ipaddress = addr.GetAddressBytes();
 					if (scope != 0)
 					{
-						ia6._set(scope, netif);
+						ia6._holder().scope_id = scope;
+						ia6._holder().scope_id_set = true;
+						ia6._holder().scope_ifname = netif;
+						ia6._holder().scope_ifname_set = true;
 					}
 					java.net.InterfaceAddress binding = new java.net.InterfaceAddress();
 					// TODO where do we get the IPv6 subnet prefix length?
@@ -558,22 +561,6 @@ static class Java_java_net_NetworkInterface
 			}
 		}
 		throw new java.net.SocketException("interface index not found");
-#endif
-	}
-
-	public static object getByIndex(int index)
-	{
-#if FIRST_PASS
-		return null;
-#else
-		foreach (java.net.NetworkInterface iface in GetInterfaces().javaInterfaces)
-		{
-			if (iface.getIndex() == index)
-			{
-				return iface;
-			}
-		}
-		return null;
 #endif
 	}
 
@@ -636,18 +623,6 @@ static class Java_java_net_NetworkInterface
 		}
 		return null;
 #endif
-	}
-
-	public static long getSubnet0(string name, int ind)
-	{
-		// this method is not used by the java code (!)
-		return 0;
-	}
-
-	public static object getBroadcast0(string name, int ind)
-	{
-		// this method is not used by the java code (!)
-		return null;
 	}
 
 	public static bool isUp0(string name, int ind)

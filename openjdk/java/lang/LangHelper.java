@@ -1,5 +1,5 @@
 /*
-  Copyright (C) 2007-2011 Jeroen Frijters
+  Copyright (C) 2007-2014 Jeroen Frijters
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -24,6 +24,10 @@
 
 package java.lang;
 
+import java.lang.annotation.Annotation;
+import java.lang.reflect.Executable;
+import java.security.AccessControlContext;
+import java.util.Map;
 import sun.nio.ch.Interruptible;
 import sun.reflect.annotation.AnnotationType;
 
@@ -34,13 +38,25 @@ public class LangHelper
     {
         return new sun.misc.JavaLangAccess() {
             public sun.reflect.ConstantPool getConstantPool(Class klass) {
-                return null;
+                return klass.getConstantPool();
             }
-            public void setAnnotationType(Class klass, AnnotationType type) {
-                klass.setAnnotationType(type);
+            public boolean casAnnotationType(Class<?> klass, AnnotationType oldType, AnnotationType newType) {
+                return klass.casAnnotationType(oldType, newType);
             }
             public AnnotationType getAnnotationType(Class klass) {
                 return klass.getAnnotationType();
+            }
+            public Map<Class<? extends Annotation>, Annotation> getDeclaredAnnotationMap(Class<?> klass) {
+                return klass.getDeclaredAnnotationMap();
+            }
+            public byte[] getRawClassAnnotations(Class<?> klass) {
+                throw new InternalError();
+            }
+            public byte[] getRawClassTypeAnnotations(Class<?> klass) {
+                return klass.getRawTypeAnnotations();
+            }
+            public byte[] getRawExecutableTypeAnnotations(Executable executable) {
+                return Class.getExecutableTypeAnnotationBytes(executable);
             }
             public <E extends Enum<E>>
                     E[] getEnumConstantsShared(Class<E> klass) {
@@ -58,8 +74,14 @@ public class LangHelper
             public StackTraceElement getStackTraceElement(Throwable t, int i) {
                 return t.getStackTraceElement(i);
             }
-            public int getStringHash32(String string) {
-                return StringHelper.hash32(string);
+            public String newStringUnsafe(char[] chars) {
+                return String.valueOf(chars);
+            }
+            public Thread newThreadWithAcc(Runnable target, AccessControlContext acc) {
+                return new Thread(target, acc);
+            }
+            public void invokeFinalize(Object o) throws Throwable {
+                // we don't actually support invoking the finalize method explicitly
             }
         };
     }

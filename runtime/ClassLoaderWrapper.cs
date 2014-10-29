@@ -1,5 +1,5 @@
 /*
-  Copyright (C) 2002-2013 Jeroen Frijters
+  Copyright (C) 2002-2014 Jeroen Frijters
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -59,7 +59,7 @@ namespace IKVM.Internal
 	abstract class TypeWrapperFactory
 	{
 		internal abstract ModuleBuilder ModuleBuilder { get; }
-		internal abstract TypeWrapper DefineClassImpl(Dictionary<string, TypeWrapper> types, ClassFile f, ClassLoaderWrapper classLoader, ProtectionDomain protectionDomain);
+		internal abstract TypeWrapper DefineClassImpl(Dictionary<string, TypeWrapper> types, TypeWrapper host, ClassFile f, ClassLoaderWrapper classLoader, ProtectionDomain protectionDomain);
 		internal abstract bool ReserveName(string name);
 		internal abstract string AllocMangledName(DynamicTypeWrapper tw);
 		internal abstract Type DefineUnloadable(string name);
@@ -303,6 +303,42 @@ namespace IKVM.Internal
 			}
 		}
 
+		internal bool WorkaroundAbstractMethodWidening
+		{
+			get
+			{
+				// pre-Roslyn C# compiler doesn't like widening access to abstract methods
+				return true;
+			}
+		}
+
+		internal bool WorkaroundInterfaceFields
+		{
+			get
+			{
+				// pre-Roslyn C# compiler doesn't allow access to interface fields
+				return true;
+			}
+		}
+
+		internal bool WorkaroundInterfacePrivateMethods
+		{
+			get
+			{
+				// pre-Roslyn C# compiler doesn't like interfaces that have non-public methods
+				return true;
+			}
+		}
+
+		internal bool WorkaroundInterfaceStaticMethods
+		{
+			get
+			{
+				// pre-Roslyn C# compiler doesn't allow access to interface static methods
+				return true;
+			}
+		}
+
 #if !STATIC_COMPILER && !STUB_GENERATOR
 		internal bool RelaxedClassNameValidation
 		{
@@ -316,6 +352,14 @@ namespace IKVM.Internal
 			}
 		}
 #endif // !STATIC_COMPILER && !STUB_GENERATOR
+
+		protected virtual void CheckProhibitedPackage(string className)
+		{
+			if (className.StartsWith("java.", StringComparison.Ordinal))
+			{
+				throw new JavaSecurityException("Prohibited package name: " + className.Substring(0, className.LastIndexOf('.')));
+			}
+		}
 
 #if !STUB_GENERATOR
 		internal TypeWrapper DefineClass(ClassFile f, ProtectionDomain protectionDomain)
@@ -344,6 +388,7 @@ namespace IKVM.Internal
 				return RegisterInitiatingLoader(tw);
 			}
 #endif
+			CheckProhibitedPackage(f.Name);
 			// check if the class already exists if we're an AssemblyClassLoader
 			if(FindLoadedClassLazy(f.Name) != null)
 			{
@@ -375,7 +420,7 @@ namespace IKVM.Internal
 			}
 			try
 			{
-				return GetTypeWrapperFactory().DefineClassImpl(types, f, this, protectionDomain);
+				return GetTypeWrapperFactory().DefineClassImpl(types, null, f, this, protectionDomain);
 			}
 			finally
 			{
@@ -1039,16 +1084,40 @@ namespace IKVM.Internal
 			{
 				Assembly asm = type.Assembly;
 #if CLASSGC
-				ClassLoaderWrapper loader;
+				ClassLoaderWrapper loader = null;
 				if(dynamicAssemblies != null && dynamicAssemblies.TryGetValue(asm, out loader))
 				{
 					lock(loader.typeToTypeWrapper)
 					{
-						return loader.typeToTypeWrapper[type];
+						TypeWrapper tw;
+						if(loader.typeToTypeWrapper.TryGetValue(type, out tw))
+						{
+							return tw;
+						}
+						// it must be an anonymous type then
+						Debug.Assert(AnonymousTypeWrapper.IsAnonymous(type));
 					}
 				}
 #endif
 #if !STATIC_COMPILER && !STUB_GENERATOR
+				if(AnonymousTypeWrapper.IsAnonymous(type))
+				{
+					Dictionary<Type, TypeWrapper> typeToTypeWrapper;
+#if CLASSGC
+					typeToTypeWrapper = loader != null ? loader.typeToTypeWrapper : globalTypeToTypeWrapper;
+#else
+					typeToTypeWrapper = globalTypeToTypeWrapper;
+#endif
+					TypeWrapper tw = new AnonymousTypeWrapper(type);
+					lock(typeToTypeWrapper)
+					{
+						if(!typeToTypeWrapper.TryGetValue(type, out wrapper))
+						{
+							typeToTypeWrapper.Add(type, wrapper = tw);
+						}
+					}
+					return wrapper;
+				}
 				if(ReflectUtil.IsReflectionOnly(type))
 				{
 					// historically we've always returned null for types that don't have a corresponding TypeWrapper (or java.lang.Class)
@@ -1356,7 +1425,7 @@ namespace IKVM.Internal
 						elementTypeName = elementTypeName.Substring(skip, elementTypeName.Length - skip - 1);
 					}
 #if STATIC_COMPILER
-					if (issueWarning)
+					if (issueWarning || classLoader.WarningLevelHigh)
 					{
 						classLoader.IssueMessage(Message.ClassNotFound, elementTypeName);
 					}
@@ -1417,6 +1486,54 @@ namespace IKVM.Internal
 			}
 #endif
 		}
+
+#if !STUB_GENERATOR
+		internal ClassFileParseOptions ClassFileParseOptions
+		{
+			get
+			{
+#if STATIC_COMPILER
+				ClassFileParseOptions cfp = ClassFileParseOptions.LocalVariableTable;
+				if (EmitStackTraceInfo)
+				{
+					cfp |= ClassFileParseOptions.LineNumberTable;
+				}
+				if (bootstrapClassLoader is CompilerClassLoader)
+				{
+					cfp |= ClassFileParseOptions.TrustedAnnotations;
+				}
+				return cfp;
+#else
+				ClassFileParseOptions cfp = ClassFileParseOptions.LineNumberTable;
+				if (EmitDebugInfo)
+				{
+					cfp |= ClassFileParseOptions.LocalVariableTable;
+				}
+				if (RelaxedClassNameValidation)
+				{
+					cfp |= ClassFileParseOptions.RelaxedClassNameValidation;
+				}
+				if (this == bootstrapClassLoader)
+				{
+					cfp |= ClassFileParseOptions.TrustedAnnotations;
+				}
+				return cfp;
+#endif
+			}
+		}
+#endif
+
+#if STATIC_COMPILER
+		internal virtual bool WarningLevelHigh
+		{
+			get { return false; }
+		}
+
+		internal virtual bool NoParameterReflection
+		{
+			get { return false; }
+		}
+#endif
 	}
 
 	sealed class GenericClassLoaderWrapper : ClassLoaderWrapper

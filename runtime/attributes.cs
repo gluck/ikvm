@@ -1,5 +1,5 @@
 /*
-  Copyright (C) 2002-2011 Jeroen Frijters
+  Copyright (C) 2002-2014 Jeroen Frijters
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -22,6 +22,8 @@
   
 */
 using System;
+using System.Collections.Generic;
+using IKVM.Internal;
 #if STATIC_COMPILER || STUB_GENERATOR
 using IKVM.Reflection;
 using Type = IKVM.Reflection.Type;
@@ -388,7 +390,7 @@ namespace IKVM.Attributes
 
 		public JavaModuleAttribute(string[] classMap)
 		{
-			this.classMap = classMap;
+			this.classMap = UnicodeUtil.UnescapeInvalidSurrogates(classMap);
 		}
 
 		public string[] GetClassMap()
@@ -418,11 +420,33 @@ namespace IKVM.Attributes
 	[AttributeUsage(AttributeTargets.All)]
 	public sealed class HideFromJavaAttribute : Attribute
 	{
+		private readonly HideFromJavaFlags flags;
+
+		public HideFromJavaAttribute()
+		{
+			flags = HideFromJavaFlags.All;
+		}
+
+		public HideFromJavaAttribute(HideFromJavaFlags flags)
+		{
+			this.flags = flags;
+		}
+
+		public HideFromJavaFlags Flags
+		{
+			get { return flags; }
+		}
 	}
 
-	[AttributeUsage(AttributeTargets.Method | AttributeTargets.Field | AttributeTargets.Property)]
-	public sealed class HideFromReflectionAttribute : Attribute
+	[Flags]
+	public enum HideFromJavaFlags : byte
 	{
+		All = Code | Reflection | StackWalk | StackTrace,
+		None = 0,
+		Code = 1,
+		Reflection = 2,
+		StackWalk = 4,		// used for LambdaForm$Compiled
+		StackTrace = 8,		// used for LambdaForm$Hidden
 	}
 
 	[Flags]
@@ -493,8 +517,8 @@ namespace IKVM.Attributes
 
 		public NameSigAttribute(string name, string sig)
 		{
-			this.name = name;
-			this.sig = sig;
+			this.name = UnicodeUtil.UnescapeInvalidSurrogates(name);
+			this.sig = UnicodeUtil.UnescapeInvalidSurrogates(sig);
 		}
 
 		public string Name
@@ -523,7 +547,7 @@ namespace IKVM.Attributes
 		// this constructor is used by ikvmc, the other constructors are for use in other .NET languages
 		public ThrowsAttribute(string[] classes)
 		{
-			this.classes = classes;
+			this.classes = UnicodeUtil.UnescapeInvalidSurrogates(classes);
 		}
 
 		public ThrowsAttribute(Type type)
@@ -555,7 +579,7 @@ namespace IKVM.Attributes
 		// NOTE this is not CLS compliant, so maybe we should have a couple of overloads
 		public ImplementsAttribute(string[] interfaces)
 		{
-			this.interfaces = interfaces;
+			this.interfaces = UnicodeUtil.UnescapeInvalidSurrogates(interfaces);
 		}
 
 		public string[] Interfaces
@@ -577,7 +601,7 @@ namespace IKVM.Attributes
 
 		public InnerClassAttribute(string innerClassName, Modifiers modifiers)
 		{
-			this.innerClassName = innerClassName;
+			this.innerClassName = UnicodeUtil.UnescapeInvalidSurrogates(innerClassName);
 			this.modifiers = modifiers;
 		}
 
@@ -605,7 +629,7 @@ namespace IKVM.Attributes
 
 		public NonNestedInnerClassAttribute(string innerClassName)
 		{
-			this.innerClassName = innerClassName;
+			this.innerClassName = UnicodeUtil.UnescapeInvalidSurrogates(innerClassName);
 		}
 
 		public string InnerClassName
@@ -624,7 +648,7 @@ namespace IKVM.Attributes
 
 		public NonNestedOuterClassAttribute(string outerClassName)
 		{
-			this.outerClassName = outerClassName;
+			this.outerClassName = UnicodeUtil.UnescapeInvalidSurrogates(outerClassName);
 		}
 
 		public string OuterClassName
@@ -662,7 +686,7 @@ namespace IKVM.Attributes
 
 		public SignatureAttribute(string signature)
 		{
-			this.signature = signature;
+			this.signature = UnicodeUtil.UnescapeInvalidSurrogates(signature);
 		}
 
 		public string Signature
@@ -683,9 +707,9 @@ namespace IKVM.Attributes
 
 		public EnclosingMethodAttribute(string className, string methodName, string methodSig)
 		{
-			this.className = className;
-			this.methodName = methodName;
-			this.methodSig = methodSig;
+			this.className = UnicodeUtil.UnescapeInvalidSurrogates(className);
+			this.methodName = UnicodeUtil.UnescapeInvalidSurrogates(methodName);
+			this.methodSig = UnicodeUtil.UnescapeInvalidSurrogates(methodSig);
 		}
 
 		internal EnclosingMethodAttribute SetClassName(Type type)
@@ -749,7 +773,7 @@ namespace IKVM.Attributes
 		//   new object[] { (byte)'?', "<exceptionClass>", "<exceptionMessage>" }
 		public AnnotationDefaultAttribute(object defaultValue)
 		{
-			this.defaultValue = defaultValue;
+			this.defaultValue = Unescape(defaultValue);
 		}
 
 		public object Value
@@ -758,6 +782,36 @@ namespace IKVM.Attributes
 			{
 				return defaultValue;
 			}
+		}
+
+		internal static object Escape(object obj)
+		{
+			return EscapeOrUnescape(obj, true);
+		}
+
+		internal static object Unescape(object obj)
+		{
+			return EscapeOrUnescape(obj, false);
+		}
+
+		private static object EscapeOrUnescape(object obj, bool escape)
+		{
+			string str = obj as string;
+			if (str != null)
+			{
+				return escape
+					? UnicodeUtil.EscapeInvalidSurrogates(str)
+					: UnicodeUtil.UnescapeInvalidSurrogates(str);
+			}
+			object[] arr = obj as object[];
+			if (arr != null)
+			{
+				for (int i = 0; i < arr.Length; i++)
+				{
+					arr[i] = EscapeOrUnescape(arr[i], escape);
+				}
+			}
+			return obj;
 		}
 	}
 
@@ -768,7 +822,7 @@ namespace IKVM.Attributes
 
 		public AnnotationAttributeAttribute(string attributeType)
 		{
-			this.attributeType = attributeType;
+			this.attributeType = UnicodeUtil.UnescapeInvalidSurrogates(attributeType);
 		}
 
 		public string AttributeType
@@ -780,14 +834,16 @@ namespace IKVM.Attributes
 		}
 	}
 
-	[AttributeUsage(AttributeTargets.Module)]
+	[AttributeUsage(AttributeTargets.Module, AllowMultiple = true)]
 	public sealed class PackageListAttribute : Attribute
 	{
-		private string[] packages;
+		internal string jar;
+		internal string[] packages;
 
-		public PackageListAttribute(string[] packages)
+		public PackageListAttribute(string jar, string[] packages)
 		{
-			this.packages = packages;
+			this.jar = jar;
+			this.packages = UnicodeUtil.UnescapeInvalidSurrogates(packages);
 		}
 
 		public string[] GetPackages()
@@ -826,12 +882,126 @@ namespace IKVM.Attributes
 
 		public DynamicAnnotationAttribute(object[] definition)
 		{
-			this.definition = definition;
+			this.definition = (object[])AnnotationDefaultAttribute.Unescape(definition);
 		}
 
 		public object[] Definition
 		{
 			get { return definition; }
+		}
+	}
+
+	[AttributeUsage(AttributeTargets.Method | AttributeTargets.Constructor)]
+	public sealed class MethodParametersAttribute : Attribute
+	{
+		private readonly Modifiers[] modifiers;
+
+		public MethodParametersAttribute(Modifiers[] modifiers)
+		{
+			this.modifiers = modifiers;
+		}
+
+		public Modifiers[] Modifiers
+		{
+			get { return modifiers; }
+		}
+
+		public bool IsMalformed
+		{
+			get { return modifiers == null; }
+		}
+	}
+
+	[AttributeUsage(AttributeTargets.Class | AttributeTargets.Interface)]
+	public sealed class ConstantPoolAttribute : Attribute
+	{
+		internal readonly object[] constantPool;
+
+		public ConstantPoolAttribute(object[] constantPool)
+		{
+			this.constantPool = Decompress(constantPool);
+		}
+
+		internal static object[] Decompress(object[] constantPool)
+		{
+			List<object> list = new List<object>();
+			foreach (object obj in constantPool)
+			{
+				int emptySlots = obj as byte? ?? obj as ushort? ?? 0;
+				if (emptySlots == 0)
+				{
+					list.Add(Unescape(obj));
+				}
+				else
+				{
+					for (int i = 0; i < emptySlots; i++)
+					{
+						list.Add(null);
+					}
+				}
+			}
+			return list.ToArray();
+		}
+
+		private static object Unescape(object obj)
+		{
+			string str = obj as string;
+			if (str != null)
+			{
+				obj = UnicodeUtil.UnescapeInvalidSurrogates(str);
+			}
+			return obj;
+		}
+
+		internal static object[] Compress(object[] constantPool, bool[] inUse)
+		{
+			int length = constantPool.Length;
+			while (!inUse[length - 1])
+			{
+				length--;
+			}
+			int write = 0;
+			for (int read = 0; read < length; read++)
+			{
+				int start = read;
+				while (!inUse[read])
+				{
+					read++;
+				}
+				int emptySlots = read - start;
+				if (emptySlots > 255)
+				{
+					constantPool[write++] = (ushort)emptySlots;
+				}
+				else if (emptySlots > 0)
+				{
+					constantPool[write++] = (byte)emptySlots;
+				}
+				constantPool[write++] = Escape(constantPool[read]);
+			}
+			Array.Resize(ref constantPool, write);
+			return constantPool;
+		}
+
+		private static object Escape(object obj)
+		{
+			string str = obj as string;
+			if (str != null)
+			{
+				obj = UnicodeUtil.EscapeInvalidSurrogates(str);
+			}
+			return obj;
+		}
+	}
+
+	[AttributeUsage(AttributeTargets.Method | AttributeTargets.Constructor | AttributeTargets.Field)]
+	public sealed class RuntimeVisibleTypeAnnotationsAttribute : Attribute
+	{
+		internal readonly byte[] data;
+
+		public RuntimeVisibleTypeAnnotationsAttribute(byte[] data)
+		{
+			this.data = data;
 		}
 	}
 

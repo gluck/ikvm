@@ -296,6 +296,11 @@ static class Java_sun_misc_Unsafe
 		throw x;
 	}
 
+	public static bool shouldBeInitialized(object thisUnsafe, java.lang.Class clazz)
+	{
+		return TypeWrapper.FromClass(clazz).HasStaticInitializer;
+	}
+
 	public static void ensureClassInitialized(object thisUnsafe, java.lang.Class clazz)
 	{
 		TypeWrapper tw = TypeWrapper.FromClass(clazz);
@@ -330,10 +335,39 @@ static class Java_sun_misc_Unsafe
 
 	public static java.lang.Class defineClass(object thisUnsafe, string name, byte[] buf, int offset, int length, java.lang.ClassLoader cl, java.security.ProtectionDomain pd)
 	{
+		return Java_java_lang_ClassLoader.defineClass1(cl, name.Replace('/', '.'), buf, offset, length, pd, null);
+	}
+
+	public static java.lang.Class defineClass(object thisUnsafe, string name, byte[] buf, int offset, int length, ikvm.@internal.CallerID callerID)
+	{
 #if FIRST_PASS
 		return null;
 #else
-		return cl.defineClass(name, buf, offset, length, pd);
+		return defineClass(thisUnsafe, name, buf, offset, length, callerID.getCallerClassLoader(), callerID.getCallerClass().pd);
+#endif
+	}
+
+	public static java.lang.Class defineAnonymousClass(object thisUnsafe, java.lang.Class host, byte[] data, object[] cpPatches)
+	{
+#if FIRST_PASS
+		return null;
+#else
+		try
+		{
+			ClassLoaderWrapper loader = TypeWrapper.FromClass(host).GetClassLoader();
+			ClassFile classFile = new ClassFile(data, 0, data.Length, "<Unknown>", loader.ClassFileParseOptions, cpPatches);
+			if (classFile.IKVMAssemblyAttribute != null)
+			{
+				// if this happens, the OpenJDK is probably trying to load an OpenJDK class file as a resource,
+				// make sure the build process includes the original class file as a resource in that case
+				throw new java.lang.ClassFormatError("Trying to define anonymous class based on stub class: " + classFile.Name);
+			}
+			return loader.GetTypeWrapperFactory().DefineClassImpl(null, TypeWrapper.FromClass(host), classFile, loader, host.pd).ClassObject;
+		}
+		catch (RetargetableJavaException x)
+		{
+			throw x.ToJava();
+		}
 #endif
 	}
 }

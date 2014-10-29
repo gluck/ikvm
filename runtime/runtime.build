@@ -141,6 +141,7 @@
                 <include name="atomic.cs" />
                 <include name="attributes.cs" />
                 <include name="BigEndianBinaryReader.cs" />
+                <include name="Boxer.cs" />
                 <include name="ByteCode.cs" />
                 <include name="ByteCodeHelper.cs" />
                 <include name="ClassFile.cs" />
@@ -157,6 +158,7 @@
                 <include name="intrinsics.cs" />
                 <include name="JavaException.cs" />
                 <include name="JsrInliner.cs" />
+                <include name="LambdaMetafactory.cs" />
                 <include name="LocalVars.cs" />
                 <include name="MemberWrapper.cs" />
                 <include name="MethodHandleUtil.cs" />
@@ -198,6 +200,7 @@
                 <include name="openjdk/sun.nio.ch.cs" />
                 <include name="openjdk/sun.reflect.cs" />
                 <include name="openjdk/sun.security.krb5.cs" />
+                <include name="openjdk/sun.util.locale.provider.cs" />
                 <include name="stubgen/ClassFileWriter.cs" />
                 <include name="stubgen/SerialVersionUID.cs" />
                 <include name="stubgen/StubGenerator.cs" />

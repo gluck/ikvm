@@ -338,7 +338,7 @@ final class NetFileSystemProvider extends AbstractFileSystemProvider
             }
         }
 
-        return FileChannelImpl.open(open(npath.path, mode, rights, share, options), npath.path, read, write, append, null);
+        return FileChannelImpl.open(open(npath.path, mode, rights, share, options), read, write, append, null);
     }
 
     private static FileDescriptor open(String path, int mode, int rights, int share, int options) throws IOException
@@ -1104,7 +1104,7 @@ final class NetFileSystemProvider extends AbstractFileSystemProvider
 
             public long size()
             {
-                return info.get_Length();
+                return info.get_Exists() ? info.get_Length() : 0;
             }
 
             public boolean isArchive()
@@ -1140,7 +1140,12 @@ final class NetFileSystemProvider extends AbstractFileSystemProvider
                 if (false) throw new cli.System.ArgumentException();
                 if (false) throw new cli.System.IO.FileNotFoundException();
                 if (false) throw new cli.System.IO.IOException();
-                return new DosFileAttributesImpl(new FileInfo(path));
+                FileInfo info = new FileInfo(path);
+                if (!info.get_Exists())
+                {
+                    throw new NoSuchFileException(path);
+                }
+                return new DosFileAttributesImpl(info);
             }
             catch (cli.System.IO.FileNotFoundException _)
             {
@@ -1192,6 +1197,10 @@ final class NetFileSystemProvider extends AbstractFileSystemProvider
                 {
                     info.set_Attributes(cli.System.IO.FileAttributes.wrap(info.get_Attributes().Value & ~attr));
                 }
+            }
+            catch (cli.System.IO.FileNotFoundException _)
+            {
+                throw new NoSuchFileException(path);
             }
             catch (cli.System.ArgumentException
                  | cli.System.IO.IOException x)

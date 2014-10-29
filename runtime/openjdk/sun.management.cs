@@ -1,5 +1,5 @@
 /*
-  Copyright (C) 2011 Jeroen Frijters
+  Copyright (C) 2011-2014 Jeroen Frijters
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -21,6 +21,7 @@
   jeroen@frijters.net
   
 */
+using System;
 #if !FIRST_PASS
 using java.lang.management;
 #endif
@@ -29,6 +30,41 @@ static class Java_sun_management_ClassLoadingImpl
 {
 	public static void setVerboseClass(bool value)
 	{
+	}
+}
+
+static class Java_sun_management_FileSystemImpl
+{
+    public static void init0()
+	{
+	}
+
+	public static bool isSecuritySupported0(string path)
+	{
+		throw new NotSupportedException();
+	}
+
+	public static bool isAccessUserOnly0(string path)
+	{
+		throw new NotSupportedException();
+	}
+}
+
+static class Java_sun_management_GcInfoBuilder
+{
+	public static int getNumGcExtAttributes(object _this, object gc)
+	{
+		throw new NotSupportedException();
+	}
+
+	public static void fillGcAttributeInfo(object _this, object gc, int numAttributes, string[] attributeNames, char[] types, string[] descriptions)
+	{
+		throw new NotSupportedException();
+	}
+
+	public static object getLastGcInfo0(object _this, object gc, int numExtAtts, object[] extAttValues, char[] extAttTypes, object[] before, object[] after)
+	{
+		throw new NotSupportedException();
 	}
 }
 
@@ -63,6 +99,53 @@ static class Java_sun_management_MemoryImpl
 	}
 
 	public static void setVerboseGC(object impl, bool value)
+	{
+	}
+}
+
+static class Java_sun_management_OperatingSystemImpl
+{
+	public static long getCommittedVirtualMemorySize0(object _this)
+	{
+		throw new System.NotImplementedException();
+	}
+
+	public static long getTotalSwapSpaceSize(object _this)
+	{
+		throw new System.NotImplementedException();
+	}
+
+	public static long getFreeSwapSpaceSize(object _this)
+	{
+		throw new System.NotImplementedException();
+	}
+
+	public static long getProcessCpuTime(object _this)
+	{
+		throw new System.NotImplementedException();
+	}
+
+	public static long getFreePhysicalMemorySize(object _this)
+	{
+		throw new System.NotImplementedException();
+	}
+
+	public static long getTotalPhysicalMemorySize(object _this)
+	{
+		throw new System.NotImplementedException();
+	}
+
+	public static double getSystemCpuLoad(object _this)
+	{
+		throw new System.NotImplementedException();
+	}
+
+	public static double getProcessCpuLoad(object _this)
+	{
+		throw new System.NotImplementedException();
+	}
+
+	public static void initialize()
 	{
 	}
 }

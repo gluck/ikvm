@@ -158,6 +158,11 @@ sealed class FatalCompilerErrorException : Exception
 				return "File not found: {0}";
 			case IKVM.Internal.Message.RuntimeMethodMissing:
 				return "Runtime method '{0}' not found";
+			case IKVM.Internal.Message.MapFileFieldNotFound:
+				return "Field '{0}' referenced in remap file was not found in class '{1}'";
+			case IKVM.Internal.Message.GhostInterfaceMethodMissing:
+				return "Remapped class '{0}' does not implement ghost interface method\n" + 
+					"\t({1}.{2}{3})";
 			default:
 				return "Missing Error Message. Please file a bug.";
 		}
@@ -516,6 +521,8 @@ sealed class IkvmcCompiler
 		Console.Error.WriteLine("-lib:<dir>                     Additional directories to search for references");
 		Console.Error.WriteLine("-highentropyva                 Enable high entropy ASLR");
 		Console.Error.WriteLine("-static                        Disable dynamic binding");
+		Console.Error.WriteLine("-assemblyattributes:<file>     Read assembly custom attributes from specified");
+		Console.Error.WriteLine("                               class file.");
 	}
 
 	void ParseCommandLine(IEnumerator<string> arglist, List<CompilerOptions> targets, CompilerOptions options)
@@ -984,6 +991,18 @@ sealed class IkvmcCompiler
 				{
 					options.nojarstubs = true;
 				}
+				else if(s.StartsWith("-assemblyattributes:", StringComparison.Ordinal))
+				{
+					ProcessAttributeAnnotationsClass(ref options.assemblyAttributeAnnotations, s.Substring(20));
+				}
+				else if(s == "-w4") // undocumented option to always warn if a class isn't found
+				{
+					options.warningLevelHigh = true;
+				}
+				else if(s == "-noparameterreflection") // undocumented option to compile core class libraries with, to disable MethodParameter attribute
+				{
+					options.noParameterReflection = true;
+				}
 				else
 				{
 					throw new FatalCompilerErrorException(Message.UnrecognizedOption, s);
@@ -1242,6 +1261,21 @@ sealed class IkvmcCompiler
 		}
 	}
 
+	private static void ArrayAppend<T>(ref T[] array, T[] append)
+	{
+		if (array == null)
+		{
+			array = append;
+		}
+		else if (append != null)
+		{
+			T[] tmp = new T[array.Length + append.Length];
+			Array.Copy(array, tmp, array.Length);
+			Array.Copy(append, 0, tmp, array.Length, append.Length);
+			array = tmp;
+		}
+	}
+
 	private static byte[] ReadFromZip(ZipFile zf, ZipEntry ze)
 	{
 		byte[] buf = new byte[ze.Size];
@@ -1259,7 +1293,7 @@ sealed class IkvmcCompiler
 		ClassFile cf;
 		try
 		{
-			cf = new ClassFile(buf, 0, buf.Length, "<unknown>", ClassFileParseOptions.None);
+			cf = new ClassFile(buf, 0, buf.Length, "<unknown>", ClassFileParseOptions.None, null);
 		}
 		catch (ClassFormatError)
 		{
@@ -1495,6 +1529,20 @@ sealed class IkvmcCompiler
 			classesToExclude = list.ToArray();
 		} 
 		catch(Exception x) 
+		{
+			throw new FatalCompilerErrorException(Message.ErrorReadingFile, filename, x.Message);
+		}
+	}
+
+	private static void ProcessAttributeAnnotationsClass(ref object[] annotations, string filename)
+	{
+		try
+		{
+			byte[] buf = File.ReadAllBytes(filename);
+			ClassFile cf = new ClassFile(buf, 0, buf.Length, null, ClassFileParseOptions.None, null);
+			ArrayAppend(ref annotations, cf.Annotations);
+		}
+		catch (Exception x)
 		{
 			throw new FatalCompilerErrorException(Message.ErrorReadingFile, filename, x.Message);
 		}

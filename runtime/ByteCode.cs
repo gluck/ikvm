@@ -380,9 +380,12 @@ enum NormalizedByteCode : byte
 	__ifnull = 198,
 	__ifnonnull = 199,
 	// This is where the pseudo-bytecodes start
+	__privileged_invokestatic = 235,		// the privileged bytecodes are used for accessing host class members
+	__privileged_invokevirtual = 237,
+	__privileged_invokespecial = 238,
 	__ldc_nothrow = 239,
 	__methodhandle_invoke = 240,
-	__methodhandle_invokeexact = 241,
+	__methodhandle_link = 241,
 	__goto_finally = 242,
 	__intrinsic_gettype = 243,
 	__athrow_no_unmap = 244,
@@ -580,7 +583,7 @@ struct ByteCodeMetaData
 			case NormalizedByteCode.__clone_array:
 			case NormalizedByteCode.__static_error:
 			case NormalizedByteCode.__methodhandle_invoke:
-			case NormalizedByteCode.__methodhandle_invokeexact:
+			case NormalizedByteCode.__methodhandle_link:
 				return true;
 			case NormalizedByteCode.__iconst:
 			case NormalizedByteCode.__ldc_nothrow:

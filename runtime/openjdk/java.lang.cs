@@ -1,5 +1,5 @@
 /*
-  Copyright (C) 2007-2013 Jeroen Frijters
+  Copyright (C) 2007-2014 Jeroen Frijters
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -96,6 +96,57 @@ static class Java_java_lang_Class
 #endif
 	}
 
+	public static byte[] getRawTypeAnnotations(java.lang.Class thisClass)
+	{
+		return TypeWrapper.FromClass(thisClass).GetRawTypeAnnotations();
+	}
+
+#if !FIRST_PASS
+	private sealed class ConstantPoolImpl : sun.reflect.ConstantPool
+	{
+		private readonly object[] constantPool;
+
+		internal ConstantPoolImpl(object[] constantPool)
+		{
+			this.constantPool = constantPool;
+		}
+
+		public override string getUTF8At(int index)
+		{
+			return (string)constantPool[index];
+		}
+
+		public override int getIntAt(int index)
+		{
+			return (int)constantPool[index];
+		}
+
+		public override long getLongAt(int index)
+		{
+			return (long)constantPool[index];
+		}
+
+		public override float getFloatAt(int index)
+		{
+			return (float)constantPool[index];
+		}
+
+		public override double getDoubleAt(int index)
+		{
+			return (double)constantPool[index];
+		}
+	}
+#endif
+
+    public static object getConstantPool(java.lang.Class thisClass)
+	{
+#if FIRST_PASS
+		return null;
+#else
+		return new ConstantPoolImpl(TypeWrapper.FromClass(thisClass).GetConstantPool());
+#endif
+	}
+
 	public static bool isInstance(java.lang.Class thisClass, object obj)
 	{
 		return TypeWrapper.FromClass(thisClass).IsInstance(obj);
@@ -169,6 +220,14 @@ static class Java_java_lang_Class
 				return "void";
 			}
 		}
+		if (tw.IsUnsafeAnonymous)
+		{
+#if !FIRST_PASS
+			// for OpenJDK compatibility and debugging convenience we modify the class name to
+			// include the identity hashcode of the class object
+			return tw.Name + "/" + java.lang.System.identityHashCode(thisClass);
+#endif
+		}
 		return tw.Name;
 	}
 
@@ -188,7 +247,7 @@ static class Java_java_lang_Class
 		return super != null ? super.ClassObject : null;
 	}
 
-	public static java.lang.Class[] getInterfaces(java.lang.Class thisClass)
+	public static java.lang.Class[] getInterfaces0(java.lang.Class thisClass)
 	{
 #if FIRST_PASS
 		return null;
@@ -252,7 +311,7 @@ static class Java_java_lang_Class
 		}
 	}
 
-	public static java.lang.Class getDeclaringClass(java.lang.Class thisClass)
+	public static java.lang.Class getDeclaringClass0(java.lang.Class thisClass)
 	{
 		try
 		{
@@ -286,9 +345,9 @@ static class Java_java_lang_Class
 		return null;
 #else
 		TypeWrapper wrapper = TypeWrapper.FromClass(thisClass);
-		while (wrapper.IsArray)
+		if (wrapper.IsArray)
 		{
-			wrapper = wrapper.ElementTypeWrapper;
+			return null;
 		}
 		java.security.ProtectionDomain pd = wrapper.ClassObject.pd;
 		if (pd == null)
@@ -300,15 +359,14 @@ static class Java_java_lang_Class
 			{
 				pd = acl.GetProtectionDomain();
 			}
+			else if (wrapper is AnonymousTypeWrapper)
+			{
+				// dynamically compiled intrinsified lamdba anonymous types end up here and should get their
+				// protection domain from the host class
+				pd = ClassLoaderWrapper.GetWrapperFromType(wrapper.TypeAsTBD.DeclaringType).ClassObject.pd;
+			}
 		}
 		return pd;
-#endif
-	}
-
-	public static void setProtectionDomain0(java.lang.Class thisClass, java.security.ProtectionDomain pd)
-	{
-#if !FIRST_PASS
-		thisClass.pd = pd;
 #endif
 	}
 
@@ -341,7 +399,7 @@ static class Java_java_lang_Class
 		}
 	}
 
-	public static string getGenericSignature(java.lang.Class thisClass)
+	public static string getGenericSignature0(java.lang.Class thisClass)
 	{
 		TypeWrapper tw = TypeWrapper.FromClass(thisClass);
 		tw.Finish();
@@ -620,16 +678,7 @@ static class Java_java_lang_ClassLoader
 			try
 			{
 				ClassLoaderWrapper classLoaderWrapper = ClassLoaderWrapper.GetClassLoaderWrapper(thisClassLoader);
-				ClassFileParseOptions cfp = ClassFileParseOptions.LineNumberTable;
-				if (classLoaderWrapper.EmitDebugInfo)
-				{
-					cfp |= ClassFileParseOptions.LocalVariableTable;
-				}
-				if (classLoaderWrapper.RelaxedClassNameValidation)
-				{
-					cfp |= ClassFileParseOptions.RelaxedClassNameValidation;
-				}
-				ClassFile classFile = new ClassFile(b, off, len, name, cfp);
+				ClassFile classFile = new ClassFile(b, off, len, name, classLoaderWrapper.ClassFileParseOptions, null);
 				if (name != null && classFile.Name != name)
 				{
 #if !FIRST_PASS
@@ -703,13 +752,13 @@ static class Java_java_lang_ClassLoader
 
 static class Java_java_lang_ClassLoader_00024NativeLibrary
 {
-	public static void load(object thisNativeLibrary, string name)
+	public static void load(object thisNativeLibrary, string name, bool isBuiltin)
 	{
 #if !FIRST_PASS
 		if (VirtualFileSystem.IsVirtualFS(name))
 		{
 			// we fake success for native libraries loaded from VFS
-			((java.lang.ClassLoader.NativeLibrary)thisNativeLibrary).handle = -1;
+			((java.lang.ClassLoader.NativeLibrary)thisNativeLibrary).loaded = true;
 		}
 		else
 		{
@@ -725,7 +774,8 @@ static class Java_java_lang_ClassLoader_00024NativeLibrary
 	private static void doLoad(object thisNativeLibrary, string name)
 	{
 		java.lang.ClassLoader.NativeLibrary lib = (java.lang.ClassLoader.NativeLibrary)thisNativeLibrary;
-		lib.handle = IKVM.Runtime.JniHelper.LoadLibrary(name, TypeWrapper.FromClass(lib.fromClass).GetClassLoader());
+		lib.handle = IKVM.Runtime.JniHelper.LoadLibrary(name, TypeWrapper.FromClass(java.lang.ClassLoader.NativeLibrary.getFromClass()).GetClassLoader());
+		lib.loaded = true;
 	}
 #endif
 
@@ -736,16 +786,21 @@ static class Java_java_lang_ClassLoader_00024NativeLibrary
 	}
 
 	[SecuritySafeCritical]
-	public static void unload(object thisNativeLibrary)
+	public static void unload(object thisNativeLibrary, string name, bool isBuiltin)
 	{
 #if !FIRST_PASS
 		java.lang.ClassLoader.NativeLibrary lib = (java.lang.ClassLoader.NativeLibrary)thisNativeLibrary;
 		long handle = Interlocked.Exchange(ref lib.handle, 0);
 		if (handle != 0)
 		{
-			IKVM.Runtime.JniHelper.UnloadLibrary(handle, TypeWrapper.FromClass(lib.fromClass).GetClassLoader());
+			IKVM.Runtime.JniHelper.UnloadLibrary(handle, TypeWrapper.FromClass(java.lang.ClassLoader.NativeLibrary.getFromClass()).GetClassLoader());
 		}
 #endif
+	}
+
+	public static string findBuiltinLib(string name)
+	{
+		return null;
 	}
 }
 
@@ -823,9 +878,12 @@ static class Java_java_lang_Package
 		{
 			Dictionary<string, string> dict = new Dictionary<string, string>();
 			string path = VirtualFileSystem.GetAssemblyResourcesPath(JVM.CoreAssembly) + "resources.jar";
-			foreach (string pkg in ClassLoaderWrapper.GetBootstrapClassLoader().GetPackages())
+			foreach (KeyValuePair<string, string[]> pkgs in ClassLoaderWrapper.GetBootstrapClassLoader().GetPackageInfo())
 			{
-				dict[pkg.Replace('.', '/') + "/"] = path;
+				foreach (string pkg in pkgs.Value)
+				{
+					dict[pkg.Replace('.', '/') + "/"] = path;
+				}
 			}
 			Interlocked.CompareExchange(ref systemPackages, dict, null);
 		}
@@ -927,18 +985,11 @@ static class Java_java_lang_SecurityManager
 		{
 			StackFrame frame = trace.GetFrame(i);
 			MethodBase method = frame.GetMethod();
-			Type type = method.DeclaringType;
-			// NOTE these checks should be the same as the ones in Reflection.getCallerClass
-			if (Java_sun_reflect_Reflection.IsHideFromJava(method)
-				|| type == null
-				|| type.Assembly == typeof(object).Assembly
-				|| type.Assembly == typeof(Java_java_lang_SecurityManager).Assembly
-				|| type.Assembly == jniAssembly
-				|| type == typeof(java.lang.reflect.Constructor)
-				|| type == typeof(java.lang.reflect.Method))
+			if (Java_sun_reflect_Reflection.IsHideFromStackWalk(method))
 			{
 				continue;
 			}
+			Type type = method.DeclaringType;
 			if (type == typeof(java.lang.SecurityManager))
 			{
 				continue;
@@ -1068,20 +1119,6 @@ static class Java_java_lang_StrictMath
 #endif
 	}
 
-	public static double ceil(double d)
-	{
-#if FIRST_PASS
-		return 0;
-#else
-		return ikvm.@internal.JMath.ceil(d);
-#endif
-	}
-
-	public static double floor(double d)
-	{
-		return fdlibm.floor(d);
-	}
-
 	public static double atan2(double y, double x)
 	{
 #if FIRST_PASS
@@ -1109,15 +1146,6 @@ static class Java_java_lang_StrictMath
 	public static double tanh(double d)
 	{
 		return Math.Tanh(d);
-	}
-
-	public static double rint(double d)
-	{
-#if FIRST_PASS
-		return 0;
-#else
-		return ikvm.@internal.JMath.rint(d);
-#endif
 	}
 
 	public static double hypot(double a, double b)
@@ -1223,9 +1251,14 @@ static class Java_java_lang_ProcessImpl
 {
 	public static string mapVfsExecutable(string path)
 	{
-		if (VirtualFileSystem.IsVirtualFS(path))
+		string unquoted = path;
+		if (unquoted.Length > 2 && unquoted[0] == '"' && unquoted[unquoted.Length - 1] == '"')
 		{
-			return VirtualFileSystem.MapExecutable(path);
+			unquoted = unquoted.Substring(1, unquoted.Length - 2);
+		}
+		if (VirtualFileSystem.IsVirtualFS(unquoted))
+		{
+			return VirtualFileSystem.MapExecutable(unquoted);
 		}
 		return path;
 	}
