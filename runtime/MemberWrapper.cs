@@ -1054,6 +1054,11 @@ namespace IKVM.Internal
 				// an interface can be implemented multiple times
 				return this;
 			}
+			else if (ifmethod.DeclaringType.ImplementsInterface(mw.DeclaringType))
+			{
+				// we can override a base interface without problems
+				return this;
+			}
 			else if (mw.DeclaringType.ImplementsInterface(ifmethod.DeclaringType))
 			{
 				return Create(DeclaringType, mw);
@@ -1077,6 +1082,11 @@ namespace IKVM.Internal
 			return new ErrorMirandaMethodWrapper(DeclaringType, ifmethod, "Conflicting default methods:")
 				.AddConflictError(ifmethod)
 				.AddConflictError(mw);
+		}
+
+		internal bool IsConflictError
+		{
+			get { return Error != null && Error.StartsWith("Conflicting default methods:"); }
 		}
 
 		internal MethodWrapper BaseMethod

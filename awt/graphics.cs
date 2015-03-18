@@ -1963,7 +1963,7 @@ namespace ikvm.awt
 
         public override java.awt.Color getBackground()
         {
-            return bgcolor == Color.Empty ? null : new java.awt.Color(color.ToArgb(), true);
+            return bgcolor == Color.Empty ? null : new java.awt.Color(bgcolor.ToArgb(), true);
         }
 
         public override java.awt.Stroke getStroke()
@@ -2242,7 +2242,7 @@ namespace ikvm.awt
 
         public override java.awt.GraphicsConfiguration getDefaultConfiguration()
         {
-            return new NetGraphicsConfiguration(Screen.PrimaryScreen);
+            return new NetGraphicsConfiguration(screen);
         }
 
         public override string getIDstring()

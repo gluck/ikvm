@@ -216,7 +216,11 @@ namespace IKVM.Internal
 			}
 			for (int i = 0, K = args.Length; i < K; i++)
 			{
-				if (!args[i].IsSubTypeOf(implParameters[i]))
+				if (args[i] == implParameters[i])
+				{
+					// ok
+				}
+				else if (args[i].IsPrimitive || implParameters[i].IsPrimitive || !args[i].IsSubTypeOf(implParameters[i]))
 				{
 					Fail("For i=1..K, Di = Ai");
 					return false;
@@ -925,6 +929,7 @@ namespace IKVM.Internal
 				&& classFile.GetConstantPoolConstantType(bsm.GetArgument(1)) == ClassFile.ConstantType.MethodHandle
 				&& classFile.GetConstantPoolConstantType(bsm.GetArgument(2)) == ClassFile.ConstantType.MethodType
 				&& (mh = classFile.GetConstantPoolConstantMethodHandle(bsm.BootstrapMethodIndex)).Kind == ClassFile.RefKind.invokeStatic
+				&& mh.Member != null
 				&& IsLambdaMetafactory(mh.Member);
 		}
 
@@ -951,6 +956,7 @@ namespace IKVM.Internal
 			int argpos = 4;
 			return bsm.ArgumentCount >= 4
 				&& (mh = classFile.GetConstantPoolConstantMethodHandle(bsm.BootstrapMethodIndex)).Kind == ClassFile.RefKind.invokeStatic
+				&& mh.Member != null
 				&& IsLambdaAltMetafactory(mh.Member)
 				&& classFile.GetConstantPoolConstantType(bsm.GetArgument(0)) == ClassFile.ConstantType.MethodType
 				&& classFile.GetConstantPoolConstantType(bsm.GetArgument(1)) == ClassFile.ConstantType.MethodHandle

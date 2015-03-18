@@ -1,5 +1,5 @@
 /*
-  Copyright (C) 2002-2014 Jeroen Frijters
+  Copyright (C) 2002-2015 Jeroen Frijters
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -67,6 +67,10 @@ static class ByteCodeHelperMethods
 	internal static readonly MethodInfo DynamicLoadMethodType;
 	internal static readonly MethodInfo DynamicLoadMethodHandle;
 	internal static readonly MethodInfo DynamicBinderMemberLookup;
+	internal static readonly MethodInfo DynamicMapException;
+	internal static readonly MethodInfo DynamicCallerID;
+	internal static readonly MethodInfo DynamicLinkIndyCallSite;
+	internal static readonly MethodInfo DynamicEraseInvokeExact;
 	internal static readonly MethodInfo VerboseCastFailure;
 	internal static readonly MethodInfo SkipFinalizer;
 	internal static readonly MethodInfo DynamicInstanceOf;
@@ -112,6 +116,10 @@ static class ByteCodeHelperMethods
 		DynamicLoadMethodType = GetHelper(typeofByteCodeHelper, "DynamicLoadMethodType");
 		DynamicLoadMethodHandle = GetHelper(typeofByteCodeHelper, "DynamicLoadMethodHandle");
 		DynamicBinderMemberLookup = GetHelper(typeofByteCodeHelper, "DynamicBinderMemberLookup");
+		DynamicMapException = GetHelper(typeofByteCodeHelper, "DynamicMapException");
+		DynamicCallerID = GetHelper(typeofByteCodeHelper, "DynamicCallerID");
+		DynamicLinkIndyCallSite = GetHelper(typeofByteCodeHelper, "DynamicLinkIndyCallSite");
+		DynamicEraseInvokeExact = GetHelper(typeofByteCodeHelper, "DynamicEraseInvokeExact");
 		VerboseCastFailure = GetHelper(typeofByteCodeHelper, "VerboseCastFailure");
 		SkipFinalizer = GetHelper(typeofByteCodeHelper, "SkipFinalizer");
 		DynamicInstanceOf = GetHelper(typeofByteCodeHelper, "DynamicInstanceOf");
@@ -196,7 +204,7 @@ static partial class MethodHandleUtil
 		{
 			WrapArgs(ilgen, last);
 		}
-		ilgen.Emit(OpCodes.Newobj, type.GetConstructors()[0]);
+		ilgen.Emit(OpCodes.Newobj, GetDelegateOrPackedArgsConstructor(type));
 	}
 
 	internal static MethodInfo GetDelegateInvokeMethod(Type delegateType)
@@ -213,13 +221,18 @@ static partial class MethodHandleUtil
 
 	internal static ConstructorInfo GetDelegateConstructor(Type delegateType)
 	{
-		if (ReflectUtil.ContainsTypeBuilder(delegateType))
+		return GetDelegateOrPackedArgsConstructor(delegateType);
+	}
+
+	private static ConstructorInfo GetDelegateOrPackedArgsConstructor(Type type)
+	{
+		if (ReflectUtil.ContainsTypeBuilder(type))
 		{
-			return TypeBuilder.GetConstructor(delegateType, delegateType.GetGenericTypeDefinition().GetConstructors()[0]);
+			return TypeBuilder.GetConstructor(type, type.GetGenericTypeDefinition().GetConstructors()[0]);
 		}
 		else
 		{
-			return delegateType.GetConstructors()[0];
+			return type.GetConstructors()[0];
 		}
 	}
 
@@ -262,11 +275,6 @@ sealed class Compiler
 	private static readonly MethodInfo keepAliveMethod;
 	internal static readonly MethodWrapper getClassFromTypeHandle;
 	internal static readonly MethodWrapper getClassFromTypeHandle2;
-	private static readonly TypeWrapper java_lang_Object;
-	private static readonly TypeWrapper java_lang_Class;
-	private static readonly TypeWrapper java_lang_Throwable;
-	private static readonly TypeWrapper cli_System_Object;
-	private static readonly TypeWrapper cli_System_Exception;
 	private readonly DynamicTypeWrapper.FinishContext context;
 	private readonly DynamicTypeWrapper clazz;
 	private readonly MethodWrapper mw;
@@ -293,30 +301,25 @@ sealed class Compiler
 		getTypeFromHandleMethod = Types.Type.GetMethod("GetTypeFromHandle", BindingFlags.Static | BindingFlags.Public, null, new Type[] { Types.RuntimeTypeHandle }, null);
 		getTypeMethod = Types.Object.GetMethod("GetType", BindingFlags.Public | BindingFlags.Instance, null, Type.EmptyTypes, null);
 		keepAliveMethod = JVM.Import(typeof(System.GC)).GetMethod("KeepAlive", BindingFlags.Static | BindingFlags.Public, null, new Type[] { Types.Object }, null);
-		java_lang_Object = CoreClasses.java.lang.Object.Wrapper;
-		java_lang_Throwable = CoreClasses.java.lang.Throwable.Wrapper;
-		cli_System_Object = DotNetTypeWrapper.GetWrapperFromDotNetType(Types.Object);
-		cli_System_Exception = DotNetTypeWrapper.GetWrapperFromDotNetType(Types.Exception);
-		java_lang_Class = CoreClasses.java.lang.Class.Wrapper;
 		// HACK we need to special case core compilation, because the __<map> methods are HideFromJava
-		if(java_lang_Throwable.TypeAsBaseType is TypeBuilder)
+		if(CoreClasses.java.lang.Throwable.Wrapper.TypeAsBaseType is TypeBuilder)
 		{
 			MethodWrapper mw;
-			mw = java_lang_Throwable.GetMethodWrapper("__<suppressFillInStackTrace>", "()V", false);
+			mw = CoreClasses.java.lang.Throwable.Wrapper.GetMethodWrapper("__<suppressFillInStackTrace>", "()V", false);
 			mw.Link();
 			suppressFillInStackTraceMethod = (MethodInfo)mw.GetMethod();
-			mw = java_lang_Throwable.GetMethodWrapper("__<unmap>", "(Ljava.lang.Throwable;)Ljava.lang.Throwable;", false);
+			mw = CoreClasses.java.lang.Throwable.Wrapper.GetMethodWrapper("__<unmap>", "(Ljava.lang.Throwable;)Ljava.lang.Throwable;", false);
 			mw.Link();
 			unmapExceptionMethod = (MethodInfo)mw.GetMethod();
-			mw = java_lang_Throwable.GetMethodWrapper("__<fixate>", "(Ljava.lang.Throwable;)Ljava.lang.Throwable;", false);
+			mw = CoreClasses.java.lang.Throwable.Wrapper.GetMethodWrapper("__<fixate>", "(Ljava.lang.Throwable;)Ljava.lang.Throwable;", false);
 			mw.Link();
 			fixateExceptionMethod = (MethodInfo)mw.GetMethod();
 		}
 		else
 		{
-			suppressFillInStackTraceMethod = java_lang_Throwable.TypeAsBaseType.GetMethod("__<suppressFillInStackTrace>", Type.EmptyTypes);
-			unmapExceptionMethod = java_lang_Throwable.TypeAsBaseType.GetMethod("__<unmap>", new Type[] { Types.Exception });
-			fixateExceptionMethod = java_lang_Throwable.TypeAsBaseType.GetMethod("__<fixate>", new Type[] { Types.Exception });
+			suppressFillInStackTraceMethod = CoreClasses.java.lang.Throwable.Wrapper.TypeAsBaseType.GetMethod("__<suppressFillInStackTrace>", Type.EmptyTypes);
+			unmapExceptionMethod = CoreClasses.java.lang.Throwable.Wrapper.TypeAsBaseType.GetMethod("__<unmap>", new Type[] { Types.Exception });
+			fixateExceptionMethod = CoreClasses.java.lang.Throwable.Wrapper.TypeAsBaseType.GetMethod("__<fixate>", new Type[] { Types.Exception });
 		}
 		getClassFromTypeHandle = ClassLoaderWrapper.LoadClassCritical("ikvm.runtime.Util").GetMethodWrapper("getClassFromTypeHandle", "(Lcli.System.RuntimeTypeHandle;)Ljava.lang.Class;", false);
 		getClassFromTypeHandle.Link();
@@ -337,7 +340,7 @@ sealed class Compiler
 		if(mw.IsConstructor)
 		{
 			MethodWrapper finalize = clazz.GetMethodWrapper(StringConstants.FINALIZE, StringConstants.SIG_VOID, true);
-			keepAlive = finalize != null && finalize.DeclaringType != java_lang_Object && finalize.DeclaringType != cli_System_Object && finalize.DeclaringType != java_lang_Throwable && finalize.DeclaringType != cli_System_Exception;
+			keepAlive = finalize != null && finalize.DeclaringType != CoreClasses.java.lang.Object.Wrapper && finalize.DeclaringType != CoreClasses.cli.System.Object.Wrapper && finalize.DeclaringType != CoreClasses.java.lang.Throwable.Wrapper && finalize.DeclaringType != CoreClasses.cli.System.Exception.Wrapper;
 		}
 #if STATIC_COMPILER
 		replacedMethodWrappers = clazz.GetReplacedMethodsFor(mw);
@@ -1116,13 +1119,13 @@ sealed class Compiler
 					bool remap;
 					if(exc.catch_type == 0)
 					{
-						exceptionTypeWrapper = java_lang_Throwable;
+						exceptionTypeWrapper = CoreClasses.java.lang.Throwable.Wrapper;
 						remap = true;
 					}
 					else
 					{
 						exceptionTypeWrapper = classFile.GetConstantPoolClassType(exc.catch_type);
-						remap = exceptionTypeWrapper.IsUnloadable || !exceptionTypeWrapper.IsSubTypeOf(cli_System_Exception);
+						remap = exceptionTypeWrapper.IsUnloadable || !exceptionTypeWrapper.IsSubTypeOf(CoreClasses.cli.System.Exception.Wrapper);
 					}
 					Type excType = exceptionTypeWrapper.TypeAsExceptionType;
 					bool mapSafe = !exceptionTypeWrapper.IsUnloadable && !exceptionTypeWrapper.IsMapUnsafeException && !exceptionTypeWrapper.IsRemapped;
@@ -1150,7 +1153,7 @@ sealed class Compiler
 						ilGenerator.EmitLdc_I4(mapFlags | 1);
 						ilGenerator.Emit(OpCodes.Call, ByteCodeHelperMethods.mapException.MakeGenericMethod(excType));
 					}
-					else if(exceptionTypeWrapper == java_lang_Throwable)
+					else if(exceptionTypeWrapper == CoreClasses.java.lang.Throwable.Wrapper)
 					{
 						ilGenerator.EmitLdc_I4(mapFlags);
 						ilGenerator.Emit(OpCodes.Call, ByteCodeHelperMethods.mapException.MakeGenericMethod(Types.Exception));
@@ -1158,15 +1161,19 @@ sealed class Compiler
 					else
 					{
 						ilGenerator.EmitLdc_I4(mapFlags | (remap ? 0 : 1));
-						ilGenerator.Emit(OpCodes.Call, ByteCodeHelperMethods.mapException.MakeGenericMethod(excType));
-						if(!unusedException)
-						{
-							ilGenerator.Emit(OpCodes.Dup);
-						}
 						if(exceptionTypeWrapper.IsUnloadable)
 						{
 							Profiler.Count("EmitDynamicExceptionHandler");
-							EmitDynamicInstanceOf(exceptionTypeWrapper);
+							EmitDynamicClassLiteral(exceptionTypeWrapper);
+							ilGenerator.Emit(OpCodes.Call, ByteCodeHelperMethods.DynamicMapException);
+						}
+						else
+						{
+							ilGenerator.Emit(OpCodes.Call, ByteCodeHelperMethods.mapException.MakeGenericMethod(excType));
+						}
+						if(!unusedException)
+						{
+							ilGenerator.Emit(OpCodes.Dup);
 						}
 						CodeEmitterLabel leave = ilGenerator.DefineLabel();
 						ilGenerator.EmitBrtrue(leave);
@@ -1492,21 +1499,21 @@ sealed class Compiler
 					nonleaf = true;
 
 					// HACK this code is duplicated in java.lang.invoke.cs
-					if(method.IsProtected && (method.DeclaringType == java_lang_Object || method.DeclaringType == java_lang_Throwable))
+					if(method.IsProtected && (method.DeclaringType == CoreClasses.java.lang.Object.Wrapper || method.DeclaringType == CoreClasses.java.lang.Throwable.Wrapper))
 					{
 						// HACK we may need to redirect finalize or clone from java.lang.Object/Throwable
 						// to a more specific base type.
-						if(thisType.IsAssignableTo(cli_System_Object))
+						if(thisType.IsAssignableTo(CoreClasses.cli.System.Object.Wrapper))
 						{
-							method = cli_System_Object.GetMethodWrapper(method.Name, method.Signature, true);
+							method = CoreClasses.cli.System.Object.Wrapper.GetMethodWrapper(method.Name, method.Signature, true);
 						}
-						else if(thisType.IsAssignableTo(cli_System_Exception))
+						else if(thisType.IsAssignableTo(CoreClasses.cli.System.Exception.Wrapper))
 						{
-							method = cli_System_Exception.GetMethodWrapper(method.Name, method.Signature, true);
+							method = CoreClasses.cli.System.Exception.Wrapper.GetMethodWrapper(method.Name, method.Signature, true);
 						}
-						else if(thisType.IsAssignableTo(java_lang_Throwable))
+						else if(thisType.IsAssignableTo(CoreClasses.java.lang.Throwable.Wrapper))
 						{
-							method = java_lang_Throwable.GetMethodWrapper(method.Name, method.Signature, true);
+							method = CoreClasses.java.lang.Throwable.Wrapper.GetMethodWrapper(method.Name, method.Signature, true);
 						}
 					}
 
@@ -1568,7 +1575,7 @@ sealed class Compiler
 									nontrivial = true;
 								}
 							}
-							if(!thisType.IsUnloadable && thisType.IsSubTypeOf(java_lang_Throwable))
+							if(!thisType.IsUnloadable && thisType.IsSubTypeOf(CoreClasses.java.lang.Throwable.Wrapper))
 							{
 								// if the next instruction is an athrow and the exception type
 								// doesn't override fillInStackTrace, we can suppress the call
@@ -1580,7 +1587,7 @@ sealed class Compiler
 								// test, because cli.System.Exception overrides fillInStackTrace.
 								if(code[i + 1].NormalizedOpCode == NormalizedByteCode.__athrow)
 								{
-									if(thisType.GetMethodWrapper("fillInStackTrace", "()Ljava.lang.Throwable;", true).DeclaringType == java_lang_Throwable)
+									if(thisType.GetMethodWrapper("fillInStackTrace", "()Ljava.lang.Throwable;", true).DeclaringType == CoreClasses.java.lang.Throwable.Wrapper)
 									{
 										ilGenerator.Emit(OpCodes.Call, suppressFillInStackTraceMethod);
 									}
@@ -1591,7 +1598,7 @@ sealed class Compiler
 								}
 							}
 							method.EmitNewobj(ilGenerator);
-							if(!thisType.IsUnloadable && thisType.IsSubTypeOf(cli_System_Exception))
+							if(!thisType.IsUnloadable && thisType.IsSubTypeOf(CoreClasses.cli.System.Exception.Wrapper))
 							{
 								// we call Throwable.__<fixate>() to disable remapping the exception
 								ilGenerator.Emit(OpCodes.Call, fixateExceptionMethod);
@@ -3002,7 +3009,16 @@ sealed class Compiler
 			ilgen.Emit(OpCodes.Ldsflda, fb);
 			ilgen.Emit(OpCodes.Ldloc, cs);
 			ilgen.Emit(OpCodes.Ldloc, ex);
-			ilgen.Emit(OpCodes.Call, ByteCodeHelperMethods.LinkIndyCallSite.MakeGenericMethod(delegateType));
+			if (HasUnloadable(cpi.GetArgTypes(), cpi.GetRetType()))
+			{
+				ilgen.Emit(OpCodes.Ldstr, cpi.Signature);
+				compiler.context.EmitCallerID(ilgen, compiler.m.IsLambdaFormHidden);
+				ilgen.Emit(OpCodes.Call, ByteCodeHelperMethods.DynamicLinkIndyCallSite.MakeGenericMethod(delegateType));
+			}
+			else
+			{
+				ilgen.Emit(OpCodes.Call, ByteCodeHelperMethods.LinkIndyCallSite.MakeGenericMethod(delegateType));
+			}
 			ilgen.Emit(OpCodes.Ldsfld, fb);
 			ilgen.Emit(OpCodes.Call, methodGetTarget);
 			for (int i = 0; i < args.Length; i++)
@@ -3087,7 +3103,18 @@ sealed class Compiler
 			methodLookup.EmitCall(ilgen);
 			ilgen.Emit(OpCodes.Ldstr, cpi.Name);
 			parameters[1].EmitConvStackTypeToSignatureType(ilgen, CoreClasses.java.lang.String.Wrapper);
-			ilgen.Emit(OpCodes.Call, ByteCodeHelperMethods.LoadMethodType.MakeGenericMethod(MethodHandleUtil.CreateDelegateTypeForLoadConstant(cpi.GetArgTypes(), cpi.GetRetType())));
+			if (HasUnloadable(cpi.GetArgTypes(), cpi.GetRetType()))
+			{
+				// the cache is useless since we only run once, so we use a local
+				ilgen.Emit(OpCodes.Ldloca, ilgen.DeclareLocal(CoreClasses.java.lang.invoke.MethodType.Wrapper.TypeAsSignatureType));
+				ilgen.Emit(OpCodes.Ldstr, cpi.Signature);
+				compiler.context.EmitCallerID(ilgen, compiler.m.IsLambdaFormCompiled);
+				ilgen.Emit(OpCodes.Call, ByteCodeHelperMethods.DynamicLoadMethodType);
+			}
+			else
+			{
+				ilgen.Emit(OpCodes.Call, ByteCodeHelperMethods.LoadMethodType.MakeGenericMethod(MethodHandleUtil.CreateDelegateTypeForLoadConstant(cpi.GetArgTypes(), cpi.GetRetType())));
+			}
 			parameters[2].EmitConvStackTypeToSignatureType(ilgen, CoreClasses.java.lang.invoke.MethodType.Wrapper);
 			for (int i = 0; i < fixedArgs; i++)
 			{
@@ -3571,14 +3598,14 @@ sealed class Compiler
 
 	private sealed class MethodHandleMethodWrapper : MethodWrapper
 	{
-		private readonly DynamicTypeWrapper.FinishContext context;
+		private readonly Compiler compiler;
 		private readonly TypeWrapper wrapper;
 		private readonly ClassFile.ConstantPoolItemMI cpi;
 
-		internal MethodHandleMethodWrapper(DynamicTypeWrapper.FinishContext context, TypeWrapper wrapper, ClassFile.ConstantPoolItemMI cpi)
-			: base(wrapper, cpi.Name, cpi.Signature, null, cpi.GetRetType(), cpi.GetArgTypes(), Modifiers.Public, MemberFlags.None)
+		internal MethodHandleMethodWrapper(Compiler compiler, TypeWrapper wrapper, ClassFile.ConstantPoolItemMI cpi)
+			: base(CoreClasses.java.lang.invoke.MethodHandle.Wrapper, cpi.Name, cpi.Signature, null, cpi.GetRetType(), cpi.GetArgTypes(), Modifiers.Public, MemberFlags.None)
 		{
-			this.context = context;
+			this.compiler = compiler;
 			this.wrapper = wrapper;
 			this.cpi = cpi;
 		}
@@ -3652,6 +3679,16 @@ sealed class Compiler
 				ilgen.Emit(OpCodes.Stloc, temps[i]);
 			}
 			Type delegateType = MethodHandleUtil.CreateMethodHandleDelegateType(args, cpi.GetRetType());
+			if (HasUnloadable(cpi.GetArgTypes(), cpi.GetRetType()))
+			{
+				// TODO consider sharing the cache for the same signatures
+				ilgen.Emit(OpCodes.Ldsflda, compiler.context.DefineDynamicMethodTypeCacheField());
+				ilgen.Emit(OpCodes.Ldstr, cpi.Signature);
+				compiler.context.EmitCallerID(ilgen, compiler.m.IsLambdaFormCompiled);
+				ilgen.Emit(OpCodes.Call, ByteCodeHelperMethods.DynamicLoadMethodType);
+				ilgen.Emit(OpCodes.Call, ByteCodeHelperMethods.LoadMethodType.MakeGenericMethod(delegateType));
+				ilgen.Emit(OpCodes.Call, ByteCodeHelperMethods.DynamicEraseInvokeExact);
+			}
 			MethodInfo mi = ByteCodeHelperMethods.GetDelegateForInvokeExact.MakeGenericMethod(delegateType);
 			ilgen.Emit(OpCodes.Call, mi);
 			for (int i = 0; i < args.Length; i++)
@@ -3704,7 +3741,7 @@ sealed class Compiler
 #else
 			typeofInvokeCache = typeof(IKVM.Runtime.InvokeCache<>);
 #endif
-			FieldBuilder fb = context.DefineMethodHandleInvokeCacheField(typeofInvokeCache.MakeGenericType(delegateType));
+			FieldBuilder fb = compiler.context.DefineMethodHandleInvokeCacheField(typeofInvokeCache.MakeGenericType(delegateType));
 			ilgen.Emit(OpCodes.Ldloc, temps[0]);
 			ilgen.Emit(OpCodes.Ldsflda, fb);
 			ilgen.Emit(OpCodes.Call, mi);
@@ -3955,7 +3992,7 @@ sealed class Compiler
 				return GetDynamicMethodWrapper(constantPoolIndex, invoke, cpi);
 			case NormalizedByteCode.__methodhandle_invoke:
 			case NormalizedByteCode.__methodhandle_link:
-				return new MethodHandleMethodWrapper(context, clazz, cpi);
+				return new MethodHandleMethodWrapper(this, clazz, cpi);
 			default:
 				throw new InvalidOperationException();
 		}

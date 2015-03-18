@@ -1,5 +1,5 @@
 /*
-  Copyright (C) 2002-2014 Jeroen Frijters
+  Copyright (C) 2002-2015 Jeroen Frijters
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -2748,6 +2748,25 @@ namespace IKVM.Internal
 			return null;
 		}
 
+		internal MethodWrapper GetInterfaceMethod(string name, string sig)
+		{
+			MethodWrapper method = GetMethodWrapper(name, sig, false);
+			if (method != null)
+			{
+				return method;
+			}
+			TypeWrapper[] interfaces = Interfaces;
+			for (int i = 0; i < interfaces.Length; i++)
+			{
+				method = interfaces[i].GetInterfaceMethod(name, sig);
+				if (method != null)
+				{
+					return method;
+				}
+			}
+			return null;
+		}
+
 		internal void SetMethods(MethodWrapper[] methods)
 		{
 			Debug.Assert(methods != null);
@@ -3086,7 +3105,7 @@ namespace IKVM.Internal
 				{
 					return false;
 				}
-				return (!elem1.IsNonPrimitiveValueType && elem1.IsSubTypeOf(elem2)) || (rank1 == rank2 && elem2.IsGhost && elem1 == CoreClasses.java.lang.Object.Wrapper);
+				return (!elem1.IsNonPrimitiveValueType && elem1.IsSubTypeOf(elem2));
 			}
 			return this.IsSubTypeOf(wrapper);
 		}
@@ -4421,13 +4440,30 @@ namespace IKVM.Internal
 			}
 		}
 
-		private bool IsCallerID(Type type)
+		private static bool IsCallerID(Type type)
 		{
 #if STUB_GENERATOR
 			return type.FullName == "ikvm.internal.CallerID";
 #else
-			return type == CoreClasses.ikvm.@internal.CallerID.Wrapper.TypeAsSignatureType
-				&& GetClassLoader() == ClassLoaderWrapper.GetBootstrapClassLoader();
+			return type == CoreClasses.ikvm.@internal.CallerID.Wrapper.TypeAsSignatureType;
+#endif
+		}
+
+		private static bool IsCallerSensitive(MethodBase mb)
+		{
+#if FIRST_PASS
+			return false;
+#elif STATIC_COMPILER || STUB_GENERATOR
+			foreach (CustomAttributeData cad in mb.GetCustomAttributesData())
+			{
+				if (cad.AttributeType.FullName == "sun.reflect.CallerSensitiveAttribute")
+				{
+					return true;
+				}
+			}
+			return false;
+#else
+			return mb.IsDefined(typeof(sun.reflect.CallerSensitiveAttribute), false);
 #endif
 		}
 
@@ -4438,7 +4474,8 @@ namespace IKVM.Internal
 			int len = parameters.Length;
 			if(len > 0
 				&& IsCallerID(parameters[len - 1].ParameterType)
-				&& !method.DeclaringType.IsInterface)
+				&& GetClassLoader() == ClassLoaderWrapper.GetBootstrapClassLoader()				
+				&& IsCallerSensitive(method))
 			{
 				len--;
 				flags |= MemberFlags.CallerID;

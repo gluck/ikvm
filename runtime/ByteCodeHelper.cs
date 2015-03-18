@@ -1,5 +1,5 @@
 /*
-  Copyright (C) 2002-2014 Jeroen Frijters
+  Copyright (C) 2002-2015 Jeroen Frijters
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -154,7 +154,12 @@ namespace IKVM.Runtime
 #else
 			Profiler.Count("DynamicMultianewarray");
 			TypeWrapper wrapper = TypeWrapper.FromClass(clazz);
-			return multianewarray(wrapper.TypeAsArrayType.TypeHandle, lengths);
+			object obj = multianewarray(wrapper.TypeAsArrayType.TypeHandle, lengths);
+			if (wrapper.IsGhostArray)
+			{
+				GhostTag.SetTag(obj, wrapper);
+			}
+			return obj;
 #endif
 		}
 
@@ -170,7 +175,12 @@ namespace IKVM.Runtime
 				throw new java.lang.NegativeArraySizeException();
 			}
 			TypeWrapper wrapper = TypeWrapper.FromClass(clazz);
-			return Array.CreateInstance(wrapper.TypeAsArrayType, length);
+			Array obj = Array.CreateInstance(wrapper.TypeAsArrayType, length);
+			if (wrapper.IsGhost || wrapper.IsGhostArray)
+			{
+				GhostTag.SetTag(obj, wrapper.MakeArrayType(1));
+			}
+			return obj;
 #endif
 		}
 
@@ -272,7 +282,21 @@ namespace IKVM.Runtime
 #else
 			Debug.Assert(obj != null);
 			Profiler.Count("DynamicInstanceOf");
-			return TypeWrapper.FromClass(clazz).IsInstance(obj);
+			TypeWrapper tw = TypeWrapper.FromClass(clazz);
+			// we have to mimick the bytecode behavior, which allows these .NET-isms to show through
+			if (tw.TypeAsBaseType == typeof(Array))
+			{
+				return obj is Array;
+			}
+			if (tw.TypeAsBaseType == typeof(string))
+			{
+				return obj is string;
+			}
+			if (tw.TypeAsBaseType == typeof(IComparable))
+			{
+				return obj is IComparable;
+			}
+			return tw.IsInstance(obj);
 #endif
 		}
 
@@ -347,13 +371,7 @@ namespace IKVM.Runtime
 									return java.lang.invoke.MethodHandles.invoker(mt);
 							}
 						}
-						java.lang.Class caller = callerID.getCallerClass();
-						DynamicTypeWrapper.FinishContext.HostCallerID hostCallerID = callerID as DynamicTypeWrapper.FinishContext.HostCallerID;
-						if (hostCallerID != null)
-						{
-							caller = hostCallerID.host.ClassObject;
-						}
-						return java.lang.invoke.MethodHandleNatives.linkMethodHandleConstant(caller, kind, refc, name, mt);
+						return java.lang.invoke.MethodHandleNatives.linkMethodHandleConstant(callerID.getCallerClass(), kind, refc, name, mt);
 				}
 			}
 			catch (RetargetableJavaException x)
@@ -373,7 +391,7 @@ namespace IKVM.Runtime
 			try
 			{
 				java.lang.invoke.MethodHandle mh = DynamicLoadMethodHandleImpl(kind, clazz, name, sig, callerID);
-				return GetDelegateForInvokeExact<T>(mh.asType(MethodHandleUtil.GetDelegateMethodType(typeof(T))));
+				return GetDelegateForInvokeExact<T>(java.lang.invoke.MethodHandles.explicitCastArguments(mh, MethodHandleUtil.GetDelegateMethodType(typeof(T))));
 			}
 			catch (java.lang.IncompatibleClassChangeError x)
 			{
@@ -444,6 +462,26 @@ namespace IKVM.Runtime
 				mw.ResolveMethod();
 				return Delegate.CreateDelegate(delegateType, obj, (MethodInfo)mw.GetMethod());
 			}
+#endif
+		}
+
+		[DebuggerStepThrough]
+		public static ikvm.@internal.CallerID DynamicCallerID(object capability)
+		{
+			return ((DynamicCallerIDProvider)capability).GetCallerID();
+		}
+
+		[DebuggerStepThrough]
+		public static java.lang.invoke.MethodHandle DynamicEraseInvokeExact(java.lang.invoke.MethodHandle mh, java.lang.invoke.MethodType expected, java.lang.invoke.MethodType target)
+		{
+#if FIRST_PASS
+			return null;
+#else
+			if (mh.type() != expected)
+			{
+				throw new java.lang.invoke.WrongMethodTypeException();
+			}
+			return java.lang.invoke.MethodHandles.explicitCastArguments(mh, target);
 #endif
 		}
 
@@ -861,6 +899,23 @@ namespace IKVM.Runtime
 			return ExceptionHelper.MapException<T>(x, (mode & MapFlags.NoRemapping) == 0, (mode & MapFlags.Unused) != 0);
 		}
 
+		[HideFromJava]
+		public static Exception DynamicMapException(Exception x, MapFlags mode, java.lang.Class exceptionClass)
+		{
+#if FIRST_PASS
+			return null;
+#else
+			TypeWrapper exceptionTypeWrapper = TypeWrapper.FromClass(exceptionClass);
+			mode &= ~MapFlags.NoRemapping;
+			if (exceptionTypeWrapper.IsSubTypeOf(CoreClasses.cli.System.Exception.Wrapper))
+			{
+				mode |= MapFlags.NoRemapping;
+			}
+			Type exceptionType = exceptionTypeWrapper == CoreClasses.java.lang.Throwable.Wrapper ? typeof(System.Exception) : exceptionTypeWrapper.TypeAsBaseType;
+			return (Exception)ByteCodeHelperMethods.mapException.MakeGenericMethod(exceptionType).Invoke(null, new object[] { x, mode });
+#endif
+		}
+
 		public static T GetDelegateForInvokeExact<T>(global::java.lang.invoke.MethodHandle h)
 			where T : class
 		{
@@ -974,6 +1029,57 @@ namespace IKVM.Runtime
 							java.lang.invoke.MethodHandles.throwException(type.returnType(), typeof(java.lang.BootstrapMethodError)),
 								exc),
 						0, type.parameterArray()));
+			}
+			IndyCallSite<T> curr = site;
+			if (curr.IsBootstrap)
+			{
+				Interlocked.CompareExchange(ref site, ics, curr);
+			}
+#endif
+		}
+
+		[HideFromJava]
+		public static void DynamicLinkIndyCallSite<T>(ref IndyCallSite<T> site, java.lang.invoke.CallSite cs, Exception x, string signature, ikvm.@internal.CallerID callerID)
+			where T : class // Delegate
+		{
+#if !FIRST_PASS
+			// when a CallSite is first constructed, it doesn't call MethodHandleNatives.setCallSiteTargetNormal(),
+			// so we have to check if we need to initialize it here (i.e. attach an IndyCallSite<T> to it)
+			if (cs != null)
+			{
+				if (cs.ics == null)
+				{
+					Java_java_lang_invoke_MethodHandleNatives.InitializeCallSite(cs);
+				}
+				lock (cs.ics)
+				{
+					cs.ics.SetTarget(cs.target);
+				}
+			}
+			java.lang.invoke.MethodType typeCache = null;
+			IndyCallSite<T> ics;
+			if (x != null || cs == null || cs.type() != DynamicLoadMethodType(ref typeCache, signature, callerID))
+			{
+				x = MapException<Exception>(x ?? (cs == null
+					? (Exception)new java.lang.ClassCastException("bootstrap method failed to produce a CallSite")
+					: new java.lang.invoke.WrongMethodTypeException()), MapFlags.None);
+				java.lang.invoke.MethodType type = LoadMethodType<T>();
+				java.lang.invoke.MethodHandle exc = x is java.lang.BootstrapMethodError
+					? java.lang.invoke.MethodHandles.constant(typeof(java.lang.BootstrapMethodError), x)
+					: java.lang.invoke.MethodHandles.publicLookup().findConstructor(typeof(java.lang.BootstrapMethodError), java.lang.invoke.MethodType.methodType(typeof(void), typeof(string), typeof(Exception)))
+						.bindTo("call site initialization exception").bindTo(x);
+				ics = new IndyCallSite<T>();
+				((IIndyCallSite)ics).SetTarget(
+					java.lang.invoke.MethodHandles.dropArguments(
+						java.lang.invoke.MethodHandles.foldArguments(
+							java.lang.invoke.MethodHandles.throwException(type.returnType(), typeof(java.lang.BootstrapMethodError)),
+								exc),
+						0, type.parameterArray()));
+			}
+			else
+			{
+				ics = new IndyCallSite<T>();
+				((IIndyCallSite)ics).SetTarget(cs.dynamicInvoker().asType(LoadMethodType<T>()));
 			}
 			IndyCallSite<T> curr = site;
 			if (curr.IsBootstrap)

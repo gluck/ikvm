@@ -1595,7 +1595,19 @@ private static InetAddress[] getNetworkInterfaceAddresses(final NetworkInterface
 }
 
 static int isAdapterIpv6Enabled(JNIEnv env, int index) {
-    return 1;
+    return java.security.AccessController.doPrivileged(new java.security.PrivilegedAction<Integer>() {
+        public Integer run() {
+            try {
+                for (java.util.Enumeration<InetAddress> e = NetworkInterface.getByIndex(index).getInetAddresses(); e.hasMoreElements(); ) {
+                    if (e.nextElement() instanceof Inet6Address) {
+                        return 1;
+                    }
+                }
+            } catch (SocketException x) {
+            }
+            return 0;
+        }
+    }).intValue();
 }
 
 private static NetworkInterface Java_java_net_NetworkInterface_getByIndex(JNIEnv env, int ni_class, int index)
@@ -2157,51 +2169,45 @@ static Object socketGetOption(JNIEnv env, TwoStacksPlainDatagramSocketImpl _this
  */
 static Object socketLocalAddress(JNIEnv env, TwoStacksPlainDatagramSocketImpl _this,
                                                       int family) {
-    throw new Error("NYI");
-/*
-    int fd=-1, fd1=-1;
+    cli.System.Net.Sockets.Socket fd = null;
+    cli.System.Net.Sockets.Socket fd1 = null;
     SOCKETADDRESS him;
-    int len = 0;
-    int port;
-    jobject iaObj;
-    int ipv6_supported = ipv6_available();
+    him = new SOCKETADDRESS();
+    Object iaObj;
+    boolean ipv6_supported = ipv6_available();
 
-    fd = getFD(env, this);
+    fd = getFD(env, _this);
     if (ipv6_supported) {
-        fd1 = getFD1(env, this);
+        fd1 = getFD1(env, _this);
     }
 
-    if (fd < 0 && fd1 < 0) {
-        JNU_ThrowByName(env, JNU_JAVANETPKG "SocketException",
+    if (fd == null && fd1 == null) {
+        JNU_ThrowByName(env, JNU_JAVANETPKG+"SocketException",
                         "Socket closed");
         return NULL;
     }
 
-    /* find out local IP address *-/
+    /* find out local IP address */
 
-    len = sizeof (struct sockaddr_in);
-
-    /* family==-1 when socket is not connected *-/
-    if ((family == IPv6) || (family == -1 && fd == -1)) {
-        fd = fd1; /* must be IPv6 only *-/
-        len = sizeof (struct SOCKADDR_IN6);
+    /* family==-1 when socket is not connected */
+    if ((family == IPv6) || (family == -1 && fd == null)) {
+        fd = fd1; /* must be IPv6 only */
     }
 
-    if (fd == -1) {
-        JNU_ThrowByName(env, JNU_JAVANETPKG "SocketException",
+    if (fd == null) {
+        JNU_ThrowByName(env, JNU_JAVANETPKG+"SocketException",
                         "Socket closed");
         return NULL;
     }
 
-    if (getsockname(fd, (struct sockaddr *)&him, &len) == -1) {
-        NET_ThrowByNameWithLastError(env, JNU_JAVANETPKG "SocketException",
+    if (getsockname(fd, him) == -1) {
+        NET_ThrowByNameWithLastError(env, JNU_JAVANETPKG+"SocketException",
                        "Error getting socket name");
         return NULL;
     }
-    iaObj = NET_SockaddrToInetAddress(env, (struct sockaddr *)&him, &port);
+    iaObj = NET_SockaddrToInetAddress(him, new int[1]);
 
     return iaObj;
-*/
 }
 
 /*

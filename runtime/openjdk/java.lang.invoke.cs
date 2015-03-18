@@ -1,5 +1,5 @@
 /*
-  Copyright (C) 2011-2014 Jeroen Frijters
+  Copyright (C) 2011-2015 Jeroen Frijters
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -280,7 +280,11 @@ static class Java_java_lang_invoke_MethodHandleNatives
 		{
 			if (self.getReferenceKind() == MethodHandleNatives.Constants.REF_invokeInterface)
 			{
-				mw = CoreClasses.java.lang.Object.Wrapper.GetMethodWrapper(self.getName(), self.getSignature().Replace('/', '.'), false);
+				mw = TypeWrapper.FromClass(self.getDeclaringClass()).GetInterfaceMethod(self.getName(), self.getSignature().Replace('/', '.'));
+				if (mw == null)
+				{
+					mw = CoreClasses.java.lang.Object.Wrapper.GetMethodWrapper(self.getName(), self.getSignature().Replace('/', '.'), false);
+				}
 				if (mw != null && mw.IsConstructor)
 				{
 					throw new java.lang.IncompatibleClassChangeError("Found interface " + self.getDeclaringClass().getName() + ", but class was expected");
@@ -410,17 +414,15 @@ static class Java_java_lang_invoke_MethodHandleNatives
 		if (mw.IsProtected && (mw.DeclaringType == CoreClasses.java.lang.Object.Wrapper || mw.DeclaringType == CoreClasses.java.lang.Throwable.Wrapper))
 		{
 			TypeWrapper thisType = TypeWrapper.FromClass(caller);
-			TypeWrapper cli_System_Object = ClassLoaderWrapper.LoadClassCritical("cli.System.Object");
-			TypeWrapper cli_System_Exception = ClassLoaderWrapper.LoadClassCritical("cli.System.Exception");
 			// HACK we may need to redirect finalize or clone from java.lang.Object/Throwable
 			// to a more specific base type.
-			if (thisType.IsAssignableTo(cli_System_Object))
+			if (thisType.IsAssignableTo(CoreClasses.cli.System.Object.Wrapper))
 			{
-				mw = cli_System_Object.GetMethodWrapper(mw.Name, mw.Signature, true);
+				mw = CoreClasses.cli.System.Object.Wrapper.GetMethodWrapper(mw.Name, mw.Signature, true);
 			}
-			else if (thisType.IsAssignableTo(cli_System_Exception))
+			else if (thisType.IsAssignableTo(CoreClasses.cli.System.Exception.Wrapper))
 			{
-				mw = cli_System_Exception.GetMethodWrapper(mw.Name, mw.Signature, true);
+				mw = CoreClasses.cli.System.Exception.Wrapper.GetMethodWrapper(mw.Name, mw.Signature, true);
 			}
 			else if (thisType.IsAssignableTo(CoreClasses.java.lang.Throwable.Wrapper))
 			{
@@ -861,39 +863,6 @@ static partial class MethodHandleUtil
 			return dm.CreateDelegate();
 		}
 
-		internal sealed class DynamicCallerID : ikvm.@internal.CallerID
-		{
-			internal static readonly DynamicCallerID Instance = new DynamicCallerID();
-
-			private DynamicCallerID() { }
-
-			internal override java.lang.Class getAndCacheClass()
-			{
-				for (int i = 0, skip = 1; ; )
-				{
-					MethodBase method = new StackFrame(i++, false).GetMethod();
-					if (method == null)
-					{
-						return null;
-					}
-					if (Java_sun_reflect_Reflection.IsHideFromStackWalk(method) || method.DeclaringType == typeof(ikvm.@internal.CallerID))
-					{
-						continue;
-					}
-					if (skip-- == 0)
-					{
-						return ClassLoaderWrapper.GetWrapperFromType(method.DeclaringType).ClassObject;
-					}
-				}
-			}
-
-			internal override java.lang.ClassLoader getAndCacheClassLoader()
-			{
-				java.lang.Class clazz = getAndCacheClass();
-				return clazz == null ? null : TypeWrapper.FromClass(clazz).GetClassLoader().GetJavaClassLoader();
-			}
-		}
-
 		internal static Delegate CreateMemberName(MethodWrapper mw, MethodType type, bool doDispatch)
 		{
 			FinishTypes(type);
@@ -910,7 +879,7 @@ static partial class MethodHandleUtil
 			}
 #endif
 			DynamicMethodBuilder dm = new DynamicMethodBuilder("MemberName:" + mw.DeclaringType.Name + "::" + mw.Name + mw.Signature, type, null,
-				mw.HasCallerID ? DynamicCallerID.Instance : null, null, owner, true);
+				mw.HasCallerID ? DynamicCallerIDProvider.Instance : null, null, owner, true);
 			for (int i = 0, count = type.parameterCount(); i < count; i++)
 			{
 				if (i == 0 && !mw.IsStatic && (tw.IsGhost || tw.IsNonPrimitiveValueType || tw.IsRemapped) && (!mw.IsConstructor || tw != CoreClasses.java.lang.String.Wrapper))
@@ -928,7 +897,7 @@ static partial class MethodHandleUtil
 						{
 							dm.EmitCastclass(tw.TypeAsBaseType);
 						}
-						else
+						else if (tw != CoreClasses.cli.System.Object.Wrapper)
 						{
 							dm.EmitCheckcast(tw);
 						}
@@ -1061,6 +1030,7 @@ static partial class MethodHandleUtil
 		internal void LoadCallerID()
 		{
 			ilgen.Emit(OpCodes.Ldarg_0);
+			ilgen.Emit(OpCodes.Call, ByteCodeHelperMethods.DynamicCallerID);
 		}
 
 		internal void LoadValueAddress()

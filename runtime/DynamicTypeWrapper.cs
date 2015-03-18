@@ -1,5 +1,5 @@
 /*
-  Copyright (C) 2002-2014 Jeroen Frijters
+  Copyright (C) 2002-2015 Jeroen Frijters
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -1272,7 +1272,7 @@ namespace IKVM.Internal
 							while (lookup != null)
 							{
 								MethodWrapper mw = GetMethodWrapperDuringCtor(lookup, methods, ifmethod.Name, ifmethod.Signature);
-								if (mw == null)
+								if (mw == null || (mw.IsMirandaMethod && mw.DeclaringType != wrapper))
 								{
 									mw = MirandaMethodWrapper.Create(wrapper, ifmethod);
 									methods.Add(mw);
@@ -1442,14 +1442,6 @@ namespace IKVM.Internal
 
 			private static void CheckLoaderConstraints(MethodWrapper mw, MethodWrapper baseMethod)
 			{
-#if !STATIC_COMPILER
-				if (JVM.FinishingForDebugSave)
-				{
-					// when we're finishing types to save a debug image (in dynamic mode) we don't care about loader constraints anymore
-					// (and we can't throw a LinkageError, because that would prevent the debug image from being saved)
-					return;
-				}
-#endif
 				if (mw.ReturnType != baseMethod.ReturnType)
 				{
 					if (mw.ReturnType.IsUnloadable || baseMethod.ReturnType.IsUnloadable)
@@ -1464,8 +1456,14 @@ namespace IKVM.Internal
 					{
 #if STATIC_COMPILER
 						StaticCompiler.LinkageError("Method \"{2}.{3}{4}\" has a return type \"{0}\" and tries to override method \"{5}.{3}{4}\" that has a return type \"{1}\"", mw.ReturnType, baseMethod.ReturnType, mw.DeclaringType.Name, mw.Name, mw.Signature, baseMethod.DeclaringType.Name);
+#else
+						// when we're finishing types to save a debug image (in dynamic mode) we don't care about loader constraints anymore
+						// (and we can't throw a LinkageError, because that would prevent the debug image from being saved)
+						if (!JVM.FinishingForDebugSave)
+						{
+							throw new LinkageError("Loader constraints violated");
+						}
 #endif
-						throw new LinkageError("Loader constraints violated");
 					}
 				}
 				TypeWrapper[] here = mw.GetParameters();
@@ -1486,8 +1484,14 @@ namespace IKVM.Internal
 						{
 #if STATIC_COMPILER
 							StaticCompiler.LinkageError("Method \"{2}.{3}{4}\" has an argument type \"{0}\" and tries to override method \"{5}.{3}{4}\" that has an argument type \"{1}\"", here[i], there[i], mw.DeclaringType.Name, mw.Name, mw.Signature, baseMethod.DeclaringType.Name);
+#else
+							// when we're finishing types to save a debug image (in dynamic mode) we don't care about loader constraints anymore
+							// (and we can't throw a LinkageError, because that would prevent the debug image from being saved)
+							if (!JVM.FinishingForDebugSave)
+							{
+								throw new LinkageError("Loader constraints violated");
+							}
 #endif
-							throw new LinkageError("Loader constraints violated");
 						}
 					}
 				}
@@ -2469,6 +2473,8 @@ namespace IKVM.Internal
 				// NOTE this implements the (completely broken) OpenJDK 7 b147 HotSpot behavior,
 				// not the algorithm specified in section 5.4.5 of the JavaSE7 JVM spec
 				// see http://weblog.ikvm.net/PermaLink.aspx?guid=bde44d8b-7ba9-4e0e-b3a6-b735627118ff and subsequent posts
+				// UPDATE as of JDK 7u65 and JDK 8u11, the algorithm changed again to handle package private methods differently
+				// this code has not been updated to reflect these changes (we're still at JDK 8 GA level)
 				explicitOverride = false;
 				MethodWrapper topPublicOrProtectedMethod = null;
 				TypeWrapper tw = wrapper.BaseTypeWrapper;
@@ -2908,18 +2914,40 @@ namespace IKVM.Internal
 							// We're a Miranda method or we're an inherited default interface method
 							Debug.Assert(baseMethods[index].Length == 1 && baseMethods[index][0].DeclaringType.IsInterface);
 							MirandaMethodWrapper mmw = (MirandaMethodWrapper)methods[index];
-							MethodAttributes attr = MethodAttributes.HideBySig | MethodAttributes.NewSlot | MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.CheckAccessOnOverride;
+							MethodAttributes attr = MethodAttributes.HideBySig | MethodAttributes.Public | MethodAttributes.Virtual | MethodAttributes.CheckAccessOnOverride;
+							MethodWrapper baseMiranda = null;
+							bool baseMirandaOverrideStub = false;
+							if (wrapper.BaseTypeWrapper == null || (baseMiranda = wrapper.BaseTypeWrapper.GetMethodWrapper(mw.Name, mw.Signature, true)) == null || !baseMiranda.IsMirandaMethod)
+							{
+								// we're not overriding a miranda method in a base class, so can we set the newslot flag
+								attr |= MethodAttributes.NewSlot;
+							}
+							else
+							{
+								baseMiranda.Link();
+								if (CheckRequireOverrideStub(methods[index], baseMiranda))
+								{
+									baseMirandaOverrideStub = true;
+									attr |= MethodAttributes.NewSlot;
+								}
+							}
 							if (wrapper.IsInterface || (wrapper.IsAbstract && mmw.BaseMethod.IsAbstract && mmw.Error == null))
 							{
 								attr |= MethodAttributes.Abstract;
 							}
 							MethodBuilder mb = methods[index].GetDefineMethodHelper().DefineMethod(wrapper, typeBuilder, methods[index].Name, attr);
 							AttributeHelper.HideFromReflection(mb);
+							if (baseMirandaOverrideStub)
+							{
+								wrapper.GenerateOverrideStub(typeBuilder, baseMiranda, mb, methods[index]);
+							}
 							if ((!wrapper.IsAbstract && mmw.BaseMethod.IsAbstract) || (!wrapper.IsInterface && mmw.Error != null))
 							{
+								string message = mmw.Error ?? (wrapper.Name + "." + methods[index].Name + methods[index].Signature);
 								CodeEmitter ilgen = CodeEmitter.Create(mb);
-								ilgen.EmitThrow("java.lang.AbstractMethodError", mmw.Error ?? (wrapper.Name + "." + methods[index].Name + methods[index].Signature));
+								ilgen.EmitThrow(mmw.IsConflictError ? "java.lang.IncompatibleClassChangeError" : "java.lang.AbstractMethodError", message);
 								ilgen.DoEmit();
+								wrapper.EmitLevel4Warning(mmw.IsConflictError ? HardError.IncompatibleClassChangeError : HardError.AbstractMethodError, message);
 							}
 #if STATIC_COMPILER
 							if (wrapper.IsInterface && !mmw.IsAbstract)
@@ -4062,36 +4090,12 @@ namespace IKVM.Internal
 				ilgen.Emit(OpCodes.Call, method);
 			}
 
-#if !STATIC_COMPILER && !FIRST_PASS
-			internal sealed class HostCallerID : ikvm.@internal.CallerID
-			{
-				internal readonly TypeWrapper host;
-				private readonly TypeWrapper wrapper;
-
-				internal HostCallerID(TypeWrapper host, TypeWrapper wrapper)
-				{
-					this.host = host;
-					this.wrapper = wrapper;
-				}
-
-				internal override java.lang.Class getAndCacheClass()
-				{
-					return wrapper.ClassObject;
-				}
-
-				internal override java.lang.ClassLoader getAndCacheClassLoader()
-				{
-					return wrapper.GetClassLoader().GetJavaClassLoader();
-				}
-			}
-#endif
-
 			internal void EmitHostCallerID(CodeEmitter ilgen)
 			{
 #if STATIC_COMPILER || FIRST_PASS
 				throw new InvalidOperationException();
 #else
-				EmitLiveObjectLoad(ilgen, new HostCallerID(host, wrapper));
+				EmitLiveObjectLoad(ilgen, DynamicCallerIDProvider.CreateCallerID(host));
 				CoreClasses.ikvm.@internal.CallerID.Wrapper.EmitCheckcast(ilgen);
 #endif
 			}
@@ -4101,8 +4105,8 @@ namespace IKVM.Internal
 #if !FIRST_PASS && !STATIC_COMPILER
 				if (dynamic)
 				{
-					EmitLiveObjectLoad(ilgen, MethodHandleUtil.DynamicMethodBuilder.DynamicCallerID.Instance);
-					ilgen.Emit(OpCodes.Castclass, CoreClasses.ikvm.@internal.CallerID.Wrapper.TypeAsBaseType);
+					EmitLiveObjectLoad(ilgen, DynamicCallerIDProvider.Instance);
+					ilgen.Emit(OpCodes.Call, ByteCodeHelperMethods.DynamicCallerID);
 					return;
 				}
 #endif
@@ -4217,6 +4221,7 @@ namespace IKVM.Internal
 									CodeEmitter ilgen = CodeEmitter.Create(mb);
 									ilgen.EmitThrow("java.lang.AbstractMethodError", mw.DeclaringType.Name + "." + mw.Name + mw.Signature);
 									ilgen.DoEmit();
+									wrapper.EmitLevel4Warning(HardError.AbstractMethodError, mw.DeclaringType.Name + "." + mw.Name + mw.Signature);
 								}
 							}
 						}
@@ -4270,6 +4275,7 @@ namespace IKVM.Internal
 								// NOTE in the JVM it is apparently legal for a non-abstract class to have abstract methods, but
 								// the CLR doens't allow this, so we have to emit a method that throws an AbstractMethodError
 								stub = true;
+								wrapper.EmitLevel4Warning(HardError.AbstractMethodError, classFile.Name + "." + m.Name + m.Signature);
 							}
 							else if (classFile.IsPublic && !classFile.IsFinal && !(m.IsPublic || m.IsProtected))
 							{
@@ -4911,11 +4917,11 @@ namespace IKVM.Internal
 				ilGenerator.EmitLdarg(1);
 				if (fieldType == PrimitiveTypeWrapper.LONG)
 				{
-					ilGenerator.Emit(OpCodes.Call, JVM.Import(typeof(System.Threading.Interlocked)).GetMethod("CompareExchange", new Type[] { Types.Int64.MakeByRefType(), Types.Int64, Types.Int64 }));
+					ilGenerator.Emit(OpCodes.Call, InterlockedMethods.CompareExchangeInt64);
 				}
 				else if (fieldType == PrimitiveTypeWrapper.INT)
 				{
-					ilGenerator.Emit(OpCodes.Call, JVM.Import(typeof(System.Threading.Interlocked)).GetMethod("CompareExchange", new Type[] { Types.Int32.MakeByRefType(), Types.Int32, Types.Int32 }));
+					ilGenerator.Emit(OpCodes.Call, InterlockedMethods.CompareExchangeInt32);
 				}
 				else
 				{
@@ -5516,18 +5522,16 @@ namespace IKVM.Internal
 					{
 						// check the loader constraints
 						bool error = false;
-						if (mce.ReturnType != ifmethod.ReturnType)
+						if (mce.ReturnType != ifmethod.ReturnType && !mce.ReturnType.IsUnloadable && !ifmethod.ReturnType.IsUnloadable)
 						{
-							// TODO handle unloadable
 							error = true;
 						}
 						TypeWrapper[] mceparams = mce.GetParameters();
 						TypeWrapper[] ifparams = ifmethod.GetParameters();
 						for (int i = 0; i < mceparams.Length; i++)
 						{
-							if (mceparams[i] != ifparams[i])
+							if (mceparams[i] != ifparams[i] && !mceparams[i].IsUnloadable && !ifparams[i].IsUnloadable)
 							{
-								// TODO handle unloadable
 								error = true;
 								break;
 							}
@@ -5557,44 +5561,12 @@ namespace IKVM.Internal
 						typeBuilder.DefineMethodOverride(mb, (MethodInfo)ifmethod.GetMethod());
 						wrapper.SetHasIncompleteInterfaceImplementation();
 					}
-					else if (mce.GetMethod() == null || mce.RealName != ifmethod.RealName || mce.IsInternal)
-					{
-						MethodBuilder mb = DefineInterfaceStubMethod(mangledName, ifmethod);
-						AttributeHelper.HideFromJava(mb);
-						CodeEmitter ilGenerator = CodeEmitter.Create(mb);
-						ilGenerator.Emit(OpCodes.Ldarg_0);
-						int argc = mce.GetParameters().Length;
-						for (int n = 0; n < argc; n++)
-						{
-							ilGenerator.EmitLdarg(n + 1);
-						}
-						mce.EmitCallvirt(ilGenerator);
-						ilGenerator.Emit(OpCodes.Ret);
-						ilGenerator.DoEmit();
-						typeBuilder.DefineMethodOverride(mb, (MethodInfo)ifmethod.GetMethod());
-					}
-					else if (!ReflectUtil.IsSameAssembly(mce.DeclaringType.TypeAsTBD, typeBuilder))
+					else if (mce.GetMethod() == null || mce.RealName != ifmethod.RealName || mce.IsInternal || !ReflectUtil.IsSameAssembly(mce.DeclaringType.TypeAsTBD, typeBuilder) || CheckRequireOverrideStub(mce, ifmethod))
 					{
 						// NOTE methods inherited from base classes in a different assembly do *not* automatically implement
 						// interface methods, so we have to generate a stub here that doesn't do anything but call the base
 						// implementation
-						MethodBuilder mb = DefineInterfaceStubMethod(mangledName, ifmethod);
-						typeBuilder.DefineMethodOverride(mb, (MethodInfo)ifmethod.GetMethod());
-						AttributeHelper.HideFromJava(mb);
-						CodeEmitter ilGenerator = CodeEmitter.Create(mb);
-						ilGenerator.Emit(OpCodes.Ldarg_0);
-						int argc = mce.GetParameters().Length;
-						for (int n = 0; n < argc; n++)
-						{
-							ilGenerator.EmitLdarg(n + 1);
-						}
-						mce.EmitCallvirt(ilGenerator);
-						ilGenerator.Emit(OpCodes.Ret);
-						ilGenerator.DoEmit();
-					}
-					else if (CheckRequireOverrideStub(mce, ifmethod))
-					{
-						wrapper.GenerateOverrideStub(typeBuilder, ifmethod, (MethodInfo)mce.GetMethod(), mce);
+						wrapper.GenerateOverrideStub(typeBuilder, ifmethod, null, mce);
 					}
 					else if (baseClassInterface && mce.DeclaringType == wrapper)
 					{
@@ -5614,6 +5586,7 @@ namespace IKVM.Internal
 						ilgen.DoEmit();
 						typeBuilder.DefineMethodOverride(mb, (MethodInfo)ifmethod.GetMethod());
 						wrapper.SetHasIncompleteInterfaceImplementation();
+						wrapper.EmitLevel4Warning(HardError.AbstractMethodError, wrapper.Name + "." + ifmethod.Name + ifmethod.Signature);
 					}
 				}
 			}
@@ -5755,10 +5728,10 @@ namespace IKVM.Internal
 					{
 						// NOTE we take a shortcut here by assuming that all "special" types (i.e. ghost or value types)
 						// are public and so we can get away with replacing all other types with object.
-						argTypes[i + instance] = (args[i].IsPrimitive || args[i].IsGhost || args[i].IsNonPrimitiveValueType) ? args[i].TypeAsSignatureType : typeof(object);
+						argTypes[i + instance] = !args[i].IsUnloadable && (args[i].IsPrimitive || args[i].IsGhost || args[i].IsNonPrimitiveValueType) ? args[i].TypeAsSignatureType : typeof(object);
 					}
 					argTypes[argTypes.Length - 1] = CoreClasses.ikvm.@internal.CallerID.Wrapper.TypeAsSignatureType;
-					Type retType = (mw.ReturnType.IsPrimitive || mw.ReturnType.IsGhost || mw.ReturnType.IsNonPrimitiveValueType) ? mw.ReturnType.TypeAsSignatureType : typeof(object);
+					Type retType = !mw.ReturnType.IsUnloadable && (mw.ReturnType.IsPrimitive || mw.ReturnType.IsGhost || mw.ReturnType.IsNonPrimitiveValueType) ? mw.ReturnType.TypeAsSignatureType : typeof(object);
 					MethodBuilder mb = tb.DefineMethod("method", MethodAttributes.Public | MethodAttributes.Static, retType, argTypes);
 					AttributeHelper.HideFromJava(mb);
 					CodeEmitter ilgen = CodeEmitter.Create(mb);
@@ -5771,7 +5744,7 @@ namespace IKVM.Internal
 					}
 					context.EmitCallerID(ilGenerator, m.IsLambdaFormCompiled);
 					ilGenerator.Emit(OpCodes.Call, mb);
-					if (!mw.ReturnType.IsPrimitive && !mw.ReturnType.IsGhost && !mw.ReturnType.IsNonPrimitiveValueType)
+					if (!mw.ReturnType.IsUnloadable && !mw.ReturnType.IsPrimitive && !mw.ReturnType.IsGhost && !mw.ReturnType.IsNonPrimitiveValueType)
 					{
 						ilGenerator.Emit(OpCodes.Castclass, mw.ReturnType.TypeAsSignatureType);
 					}
@@ -5847,7 +5820,7 @@ namespace IKVM.Internal
 					ilGenerator.Emit(OpCodes.Stloc, jnienv);
 					ilGenerator.BeginExceptionBlock();
 					TypeWrapper retTypeWrapper = mw.ReturnType;
-					if (!retTypeWrapper.IsUnloadable && !retTypeWrapper.IsPrimitive)
+					if (retTypeWrapper.IsUnloadable || !retTypeWrapper.IsPrimitive)
 					{
 						// this one is for use after we return from "calli"
 						ilGenerator.Emit(OpCodes.Ldloca, localRefStruct);
@@ -5919,7 +5892,11 @@ namespace IKVM.Internal
 					CodeEmitterLocal retValue = null;
 					if (retTypeWrapper != PrimitiveTypeWrapper.VOID)
 					{
-						if (!retTypeWrapper.IsUnloadable && !retTypeWrapper.IsPrimitive)
+						if (retTypeWrapper.IsUnloadable)
+						{
+							ilGenerator.Emit(OpCodes.Call, unwrapLocalRef);
+						}
+						else if (!retTypeWrapper.IsPrimitive)
 						{
 							ilGenerator.Emit(OpCodes.Call, unwrapLocalRef);
 							if (retTypeWrapper.IsNonPrimitiveValueType)
@@ -6556,7 +6533,7 @@ namespace IKVM.Internal
 		{
 			Debug.Assert(!baseMethod.HasCallerID);
 
-			MethodBuilder overrideStub = baseMethod.GetDefineMethodHelper().DefineMethod(this, typeBuilder, "__<overridestub>" + baseMethod.Name, MethodAttributes.Private | MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final);
+			MethodBuilder overrideStub = baseMethod.GetDefineMethodHelper().DefineMethod(this, typeBuilder, "__<overridestub>" + baseMethod.DeclaringType.Name + "::" + baseMethod.Name, MethodAttributes.Private | MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final);
 			typeBuilder.DefineMethodOverride(overrideStub, (MethodInfo)baseMethod.GetMethod());
 
 			Type stubret = baseMethod.ReturnTypeForDefineMethod;
@@ -6573,7 +6550,14 @@ namespace IKVM.Internal
 					ilgen.Emit(OpCodes.Castclass, targetArgs[i]);
 				}
 			}
-			ilgen.Emit(OpCodes.Callvirt, target);
+			if (target != null)
+			{
+				ilgen.Emit(OpCodes.Callvirt, target);
+			}
+			else
+			{
+				targetMethod.EmitCallvirt(ilgen);
+			}
 			if (targetRet != stubret)
 			{
 				ilgen.Emit(OpCodes.Castclass, stubret);
@@ -7137,6 +7121,27 @@ namespace IKVM.Internal
 		{
 			return impl.GetFieldRawTypeAnnotations(Array.IndexOf(GetFields(), fw));
 		}
+
+		[Conditional("STATIC_COMPILER")]
+		internal void EmitLevel4Warning(HardError error, string message)
+		{
+#if STATIC_COMPILER
+			if (GetClassLoader().WarningLevelHigh)
+			{
+				switch (error)
+				{
+					case HardError.AbstractMethodError:
+						GetClassLoader().IssueMessage(Message.EmittedAbstractMethodError, this.Name, message);
+						break;
+					case HardError.IncompatibleClassChangeError:
+						GetClassLoader().IssueMessage(Message.EmittedIncompatibleClassChangeError, this.Name, message);
+						break;
+					default:
+						throw new InvalidOperationException();
+				}
+			}
+#endif
+		}
 	}
 
 	sealed class DefineMethodHelper
@@ -7203,4 +7208,44 @@ namespace IKVM.Internal
 			return DefineMethod(context, tb, ConstructorInfo.ConstructorName, attribs | MethodAttributes.SpecialName | MethodAttributes.RTSpecialName);
 		}
 	}
+
+#if !STATIC_COMPILER
+	sealed class DynamicCallerIDProvider
+	{
+		// this object acts as a capability that is passed to trusted code to allow the DynamicCallerID()
+		// method to be public without giving untrusted code the ability to forge a CallerID token
+		internal static readonly DynamicCallerIDProvider Instance = new DynamicCallerIDProvider();
+
+		private DynamicCallerIDProvider() { }
+
+		internal ikvm.@internal.CallerID GetCallerID()
+		{
+			for (int i = 0; ; )
+			{
+				MethodBase method = new StackFrame(i++, false).GetMethod();
+				if (method == null)
+				{
+#if !FIRST_PASS
+					return ikvm.@internal.CallerID.create(null, null);
+#endif
+				}
+				if (Java_sun_reflect_Reflection.IsHideFromStackWalk(method))
+				{
+					continue;
+				}
+				TypeWrapper caller = ClassLoaderWrapper.GetWrapperFromType(method.DeclaringType);
+				return CreateCallerID(caller);
+			}
+		}
+
+		internal static ikvm.@internal.CallerID CreateCallerID(TypeWrapper tw)
+		{
+#if FIRST_PASS
+			return null;
+#else
+			return ikvm.@internal.CallerID.create(tw.ClassObject, tw.GetClassLoader().GetJavaClassLoader());
+#endif
+		}
+	}
+#endif
 }

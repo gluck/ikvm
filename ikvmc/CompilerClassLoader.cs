@@ -3367,6 +3367,7 @@ namespace IKVM.Internal
 		internal void Add(string name, byte[] data, FileInfo fileInfo)
 		{
 			ZipEntry zipEntry = new ZipEntry(name);
+			zipEntry.DateTime = fileInfo.LastWriteTimeUtc;
 			zipEntry.CompressionMethod = CompressionMethod.Stored;
 			Items.Add(new JarItem(zipEntry, data, fileInfo));
 		}
@@ -3765,15 +3766,30 @@ namespace IKVM.Internal
 
 	static class StaticCompiler
 	{
-		internal static readonly Universe Universe = new Universe(UniverseOptions.ResolveMissingMembers | UniverseOptions.EnableFunctionPointers);
+		private static Universe universe;
 		internal static Assembly runtimeAssembly;
 		internal static Assembly runtimeJniAssembly;
 		internal static CompilerOptions toplevel;
 		internal static int errorCount;
 
-		static StaticCompiler()
+		internal static Universe Universe
 		{
-			Universe.ResolvedMissingMember += ResolvedMissingMember;
+			get
+			{
+				Debug.Assert(universe != null);
+				return universe;
+			}
+		}
+
+		internal static void Init(bool emitSymbols)
+		{
+			UniverseOptions options = UniverseOptions.ResolveMissingMembers | UniverseOptions.EnableFunctionPointers;
+			if (!emitSymbols)
+			{
+				options |= UniverseOptions.DeterministicOutput;
+			}
+			universe = new Universe(options);
+			universe.ResolvedMissingMember += ResolvedMissingMember;
 		}
 
 		private static void ResolvedMissingMember(Module requestingModule, MemberInfo member)

@@ -1,5 +1,5 @@
 /*
-  Copyright (C) 2008-2012 Jeroen Frijters
+  Copyright (C) 2008-2015 Jeroen Frijters
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -25,7 +25,9 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Diagnostics;
+#if !NO_SYMBOL_WRITER
 using System.Diagnostics.SymbolStore;
+#endif
 using System.Security.Cryptography;
 using System.Resources;
 using System.Runtime.CompilerServices;
@@ -39,7 +41,8 @@ namespace IKVM.Reflection.Emit
 	public sealed class ModuleBuilder : Module, ITypeOwner
 	{
 		private static readonly bool usePublicKeyAssemblyReference = false;
-		private Guid mvid = Guid.NewGuid();
+		private Guid mvid;
+		private uint timestamp;
 		private long imageBaseAddress = 0x00400000;
 		private long stackReserve = -1;
 		private int fileAlignment = 0x200;
@@ -55,7 +58,6 @@ namespace IKVM.Reflection.Emit
 		internal readonly ByteBuffer methodBodies = new ByteBuffer(128 * 1024);
 		internal readonly List<int> tokenFixupOffsets = new List<int>();
 		internal readonly ByteBuffer initializedData = new ByteBuffer(512);
-		internal readonly ByteBuffer manifestResources = new ByteBuffer(512);
 		internal ResourceSection unmanagedResources;
 		private readonly Dictionary<MemberRefKey, int> importedMemberRefs = new Dictionary<MemberRefKey, int>();
 		private readonly Dictionary<MethodSpecKey, int> importedMethodSpecs = new Dictionary<MethodSpecKey, int>();
@@ -71,30 +73,81 @@ namespace IKVM.Reflection.Emit
 		internal readonly List<VTableFixups> vtablefixups = new List<VTableFixups>();
 		internal readonly List<UnmanagedExport> unmanagedExports = new List<UnmanagedExport>();
 		private List<InterfaceImplCustomAttribute> interfaceImplCustomAttributes;
-		private List<ResourceWriterRecord> resourceWriters;
+		private readonly List<ResourceWriterRecord> resourceWriters = new List<ResourceWriterRecord>();
 		private bool saved;
 
 		private struct ResourceWriterRecord
 		{
 			private readonly string name;
+#if !CORECLR
 			private readonly ResourceWriter rw;
-			private readonly MemoryStream mem;
+#endif
+			private readonly Stream stream;
 			private readonly ResourceAttributes attributes;
 
-			internal ResourceWriterRecord(string name, ResourceWriter rw, MemoryStream mem, ResourceAttributes attributes)
+#if CORECLR
+			internal ResourceWriterRecord(string name, Stream stream, ResourceAttributes attributes)
+			{
+				this.name = name;
+				this.stream = stream;
+				this.attributes = attributes;
+			}
+#else
+			internal ResourceWriterRecord(string name, Stream stream, ResourceAttributes attributes)
+				: this(name, null, stream, attributes)
+			{
+			}
+
+			internal ResourceWriterRecord(string name, ResourceWriter rw, Stream stream, ResourceAttributes attributes)
 			{
 				this.name = name;
 				this.rw = rw;
-				this.mem = mem;
+				this.stream = stream;
 				this.attributes = attributes;
 			}
+#endif
 
-			internal void Emit(ModuleBuilder mb)
+			internal void Emit(ModuleBuilder mb, int offset)
 			{
-				rw.Generate();
-				mem.Position = 0;
-				mb.DefineManifestResource(name, mem, attributes);
-				rw.Close();
+#if !CORECLR
+				if (rw != null)
+				{
+					rw.Generate();
+				}
+#endif
+				ManifestResourceTable.Record rec = new ManifestResourceTable.Record();
+				rec.Offset = offset;
+				rec.Flags = (int)attributes;
+				rec.Name = mb.Strings.Add(name);
+				rec.Implementation = 0;
+				mb.ManifestResource.AddRecord(rec);
+			}
+
+			internal int GetLength()
+			{
+				return 4 + (int)stream.Length;
+			}
+
+			internal void Write(MetadataWriter mw)
+			{
+				mw.Write((int)stream.Length);
+				stream.Position = 0;
+				byte[] buffer = new byte[8192];
+				int length;
+				while ((length = stream.Read(buffer, 0, buffer.Length)) != 0)
+				{
+					mw.Write(buffer, 0, length);
+				}
+			}
+
+			internal void Close()
+			{
+#if !CORECLR
+				if (rw != null)
+				{
+					rw.Close();
+				}
+#endif
 			}
 		}
 
@@ -198,6 +251,15 @@ namespace IKVM.Reflection.Emit
 			if (emitSymbolInfo)
 			{
 				symbolWriter = SymbolSupport.CreateSymbolWriterFor(this);
+				if (universe.Deterministic && !symbolWriter.IsDeterministic)
+				{
+					throw new NotSupportedException();
+				}
+			}
+			if (!universe.Deterministic)
+			{
+				__PEHeaderTimeDateStamp = DateTime.UtcNow;
+				mvid = Guid.NewGuid();
 			}
 			// <Module> must be the first record in the TypeDef table
 			moduleType = new TypeBuilder(this, null, "<Module>");
@@ -450,11 +512,13 @@ namespace IKVM.Reflection.Emit
 			this.DeclSecurity.AddRecord(rec);
 		}
 
+#if !CORECLR
 		internal void AddDeclarativeSecurity(int token, System.Security.Permissions.SecurityAction securityAction, System.Security.PermissionSet permissionSet)
 		{
 			// like Ref.Emit, we're using the .NET 1.x xml format
 			AddDeclSecurityRecord(token, (int)securityAction, this.Blobs.Add(ByteBuffer.Wrap(System.Text.Encoding.Unicode.GetBytes(permissionSet.ToXml().ToString()))));
 		}
+#endif
 
 		internal void AddDeclarativeSecurity(int token, List<CustomAttributeBuilder> declarativeSecurity)
 		{
@@ -509,21 +573,10 @@ namespace IKVM.Reflection.Emit
 
 		public void DefineManifestResource(string name, Stream stream, ResourceAttributes attribute)
 		{
-			manifestResources.Align(8);
-			ManifestResourceTable.Record rec = new ManifestResourceTable.Record();
-			rec.Offset = manifestResources.Position;
-			rec.Flags = (int)attribute;
-			rec.Name = this.Strings.Add(name);
-			rec.Implementation = 0;
-			this.ManifestResource.AddRecord(rec);
-			manifestResources.Write(0);	// placeholder for the length
-			manifestResources.Write(stream);
-			int savePosition = manifestResources.Position;
-			manifestResources.Position = rec.Offset;
-			manifestResources.Write(savePosition - (manifestResources.Position + 4));
-			manifestResources.Position = savePosition;
+			resourceWriters.Add(new ResourceWriterRecord(name, stream, attribute));
 		}
 
+#if !CORECLR
 		public IResourceWriter DefineResource(string name, string description)
 		{
 			return DefineResource(name, description, ResourceAttributes.Public);
@@ -533,25 +586,59 @@ namespace IKVM.Reflection.Emit
 		{
 			// FXBUG we ignore the description, because there is no such thing
 
-			if (resourceWriters == null)
-			{
-				resourceWriters = new List<ResourceWriterRecord>();
-			}
 			MemoryStream mem = new MemoryStream();
 			ResourceWriter rw = new ResourceWriter(mem);
 			resourceWriters.Add(new ResourceWriterRecord(name, rw, mem, attribute));
 			return rw;
 		}
+#endif
 
 		internal void EmitResources()
 		{
-			if (resourceWriters != null)
+			int offset = 0;
+			foreach (ResourceWriterRecord rwr in resourceWriters)
 			{
-				foreach (ResourceWriterRecord rwr in resourceWriters)
-				{
-					rwr.Emit(this);
-				}
+				// resources must be 8-byte aligned
+				offset = (offset + 7) & ~7;
+				rwr.Emit(this, offset);
+				offset += rwr.GetLength();
 			}
+		}
+
+		internal void WriteResources(MetadataWriter mw)
+		{
+			int offset = 0;
+			foreach (ResourceWriterRecord rwr in resourceWriters)
+			{
+				// resources must be 8-byte aligned
+				int alignment = ((offset + 7) & ~7) - offset;
+				for (int i = 0; i < alignment; i++)
+				{
+					mw.Write((byte)0);
+				}
+				rwr.Write(mw);
+				offset += rwr.GetLength() + alignment;
+			}
+		}
+
+		internal void CloseResources()
+		{
+			foreach (ResourceWriterRecord rwr in resourceWriters)
+			{
+				rwr.Close();
+			}
+		}
+
+		internal int GetManifestResourcesLength()
+		{
+			int length = 0;
+			foreach (ResourceWriterRecord rwr in resourceWriters)
+			{
+				// resources must be 8-byte aligned
+				length = (length + 7) & ~7;
+				length += rwr.GetLength();
+			}
+			return length;
 		}
 
 		public override Assembly Assembly
@@ -594,10 +681,12 @@ namespace IKVM.Reflection.Emit
 			}
 		}
 
+#if !NO_SYMBOL_WRITER
 		public ISymbolDocumentWriter DefineDocument(string url, Guid language, Guid languageVendor, Guid documentType)
 		{
 			return symbolWriter.DefineDocument(url, language, languageVendor, documentType);
 		}
+#endif
 
 		public int __GetAssemblyToken(Assembly assembly)
 		{
@@ -1042,7 +1131,7 @@ namespace IKVM.Reflection.Emit
 			}
 		}
 
-		internal void WriteMetadata(MetadataWriter mw)
+		internal void WriteMetadata(MetadataWriter mw, out int guidHeapOffset)
 		{
 			mw.Write(0x424A5342);			// Signature ("BSJB")
 			mw.Write((ushort)1);			// MajorVersion
@@ -1095,6 +1184,7 @@ namespace IKVM.Reflection.Emit
 			Tables.Write(mw);
 			Strings.Write(mw);
 			UserStrings.Write(mw);
+			guidHeapOffset = mw.Position;
 			Guids.Write(mw);
 			if (!Blobs.IsEmpty)
 			{
@@ -1316,14 +1406,50 @@ namespace IKVM.Reflection.Emit
 			get { return fileName; }
 		}
 
+		internal Guid GetModuleVersionIdOrEmpty()
+		{
+			return mvid;
+		}
+
 		public override Guid ModuleVersionId
 		{
-			get { return mvid; }
+			get
+			{
+				if (mvid == Guid.Empty && universe.Deterministic)
+				{
+					// if a deterministic GUID is used, it can't be queried before the assembly has been written
+					throw new InvalidOperationException();
+				}
+				return mvid;
+			}
 		}
 
 		public void __SetModuleVersionId(Guid guid)
 		{
+			if (guid == Guid.Empty && universe.Deterministic)
+			{
+				// if you want to use Guid.Empty, don't set UniverseOptions.DeterministicOutput
+				throw new ArgumentOutOfRangeException();
+			}
 			mvid = guid;
+		}
+
+		internal uint GetTimeDateStamp()
+		{
+			return timestamp;
+		}
+
+		public DateTime __PEHeaderTimeDateStamp
+		{
+			get { return new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(timestamp); }
+			set
+			{
+				if (value < new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc) || value > new DateTime(2106, 2, 7, 6, 28, 15, DateTimeKind.Utc))
+				{
+					throw new ArgumentOutOfRangeException();
+				}
+				timestamp = (uint)(value - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds;
+			}
 		}
 
 		public override Type[] __ResolveOptionalParameterTypes(int metadataToken, Type[] genericTypeArguments, Type[] genericMethodArguments, out CustomModifiers[] customModifiers)
@@ -1336,10 +1462,12 @@ namespace IKVM.Reflection.Emit
 			get { return moduleName; }
 		}
 
+#if !NO_SYMBOL_WRITER
 		public ISymbolWriter GetSymWriter()
 		{
 			return symbolWriter;
 		}
+#endif
 
 		public void DefineUnmanagedResource(string resourceFileName)
 		{
@@ -1361,10 +1489,12 @@ namespace IKVM.Reflection.Emit
 			{
 				token = -token | 0x06000000;
 			}
+#if !NO_SYMBOL_WRITER
 			if (symbolWriter != null)
 			{
 				symbolWriter.SetUserEntryPoint(new SymbolToken(token));
 			}
+#endif
 		}
 
 		public StringToken GetStringConstant(string str)
@@ -1536,6 +1666,7 @@ namespace IKVM.Reflection.Emit
 			FillAssemblyRefTable();
 			EmitResources();
 			ModuleWriter.WriteModule(null, null, this, PEFileKinds.Dll, portableExecutableKind, imageFileMachine, unmanagedResources, 0, streamOrNull);
+			CloseResources();
 		}
 
 		public void __AddAssemblyReference(AssemblyName assemblyName)
