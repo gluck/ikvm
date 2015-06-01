@@ -340,18 +340,14 @@ namespace IKVM.Reflection
 		{
 			while (type.HasElementType)
 			{
-				if (type.__IsVector)
+				byte sigElementType = type.SigElementType;
+				bb.Write(sigElementType);
+				if (sigElementType == ELEMENT_TYPE_ARRAY)
 				{
-					bb.Write(ELEMENT_TYPE_SZARRAY);
-				}
-				else if (type.IsArray)
-				{
-					int rank = type.GetArrayRank();
-					bb.Write(ELEMENT_TYPE_ARRAY);
 					// LAMESPEC the Type production (23.2.12) doesn't include CustomMod* for arrays, but the verifier allows it and ildasm also supports it
 					WriteCustomModifiers(module, bb, type.__GetCustomModifiers());
 					WriteType(module, bb, type.GetElementType());
-					bb.WriteCompressedUInt(rank);
+					bb.WriteCompressedUInt(type.GetArrayRank());
 					int[] sizes = type.__GetArraySizes();
 					bb.WriteCompressedUInt(sizes.Length);
 					for (int i = 0; i < sizes.Length; i++)
@@ -366,100 +362,16 @@ namespace IKVM.Reflection
 					}
 					return;
 				}
-				else if (type.IsByRef)
-				{
-					bb.Write(ELEMENT_TYPE_BYREF);
-				}
-				else if (type.IsPointer)
-				{
-					bb.Write(ELEMENT_TYPE_PTR);
-				}
 				WriteCustomModifiers(module, bb, type.__GetCustomModifiers());
 				type = type.GetElementType();
 			}
-			Universe u = module.universe;
-			if (type == u.System_Void)
+			if (type.__IsBuiltIn)
 			{
-				bb.Write(ELEMENT_TYPE_VOID);
-			}
-			else if (type == u.System_Int32)
-			{
-				bb.Write(ELEMENT_TYPE_I4);
-			}
-			else if (type == u.System_Boolean)
-			{
-				bb.Write(ELEMENT_TYPE_BOOLEAN);
-			}
-			else if (type == u.System_String)
-			{
-				bb.Write(ELEMENT_TYPE_STRING);
-			}
-			else if (type == u.System_Char)
-			{
-				bb.Write(ELEMENT_TYPE_CHAR);
-			}
-			else if (type == u.System_SByte)
-			{
-				bb.Write(ELEMENT_TYPE_I1);
-			}
-			else if (type == u.System_Byte)
-			{
-				bb.Write(ELEMENT_TYPE_U1);
-			}
-			else if (type == u.System_Int16)
-			{
-				bb.Write(ELEMENT_TYPE_I2);
-			}
-			else if (type == u.System_UInt16)
-			{
-				bb.Write(ELEMENT_TYPE_U2);
-			}
-			else if (type == u.System_UInt32)
-			{
-				bb.Write(ELEMENT_TYPE_U4);
-			}
-			else if (type == u.System_Int64)
-			{
-				bb.Write(ELEMENT_TYPE_I8);
-			}
-			else if (type == u.System_UInt64)
-			{
-				bb.Write(ELEMENT_TYPE_U8);
-			}
-			else if (type == u.System_Single)
-			{
-				bb.Write(ELEMENT_TYPE_R4);
-			}
-			else if (type == u.System_Double)
-			{
-				bb.Write(ELEMENT_TYPE_R8);
-			}
-			else if (type == u.System_IntPtr)
-			{
-				bb.Write(ELEMENT_TYPE_I);
-			}
-			else if (type == u.System_UIntPtr)
-			{
-				bb.Write(ELEMENT_TYPE_U);
-			}
-			else if (type == u.System_TypedReference)
-			{
-				bb.Write(ELEMENT_TYPE_TYPEDBYREF);
-			}
-			else if (type == u.System_Object)
-			{
-				bb.Write(ELEMENT_TYPE_OBJECT);
+				bb.Write(type.SigElementType);
 			}
 			else if (type.IsGenericParameter)
 			{
-				if (type is UnboundGenericMethodParameter || type.DeclaringMethod != null)
-				{
-					bb.Write(ELEMENT_TYPE_MVAR);
-				}
-				else
-				{
-					bb.Write(ELEMENT_TYPE_VAR);
-				}
+				bb.Write(type.SigElementType);
 				bb.WriteCompressedUInt(type.GenericParameterPosition);
 			}
 			else if (!type.__IsMissing && type.IsGenericType)
@@ -666,25 +578,13 @@ namespace IKVM.Reflection
 			}
 			foreach (Type type in args)
 			{
-				if (type == MarkerType.ModOpt)
-				{
-					bb.Write(ELEMENT_TYPE_CMOD_OPT);
-				}
-				else if (type == MarkerType.ModReq)
-				{
-					bb.Write(ELEMENT_TYPE_CMOD_REQD);
-				}
-				else if (type == MarkerType.Sentinel)
-				{
-					bb.Write(SENTINEL);
-				}
-				else if (type == MarkerType.Pinned)
-				{
-					bb.Write(ELEMENT_TYPE_PINNED);
-				}
-				else if (type == null)
+				if (type == null)
 				{
 					bb.Write(ELEMENT_TYPE_VOID);
+				}
+				else if (type is MarkerType)
+				{
+					bb.Write(type.SigElementType);
 				}
 				else
 				{

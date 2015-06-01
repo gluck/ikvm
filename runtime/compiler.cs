@@ -1499,7 +1499,7 @@ sealed class Compiler
 					nonleaf = true;
 
 					// HACK this code is duplicated in java.lang.invoke.cs
-					if(method.IsProtected && (method.DeclaringType == CoreClasses.java.lang.Object.Wrapper || method.DeclaringType == CoreClasses.java.lang.Throwable.Wrapper))
+					if(method.IsFinalizeOrClone)
 					{
 						// HACK we may need to redirect finalize or clone from java.lang.Object/Throwable
 						// to a more specific base type.
@@ -3190,7 +3190,11 @@ sealed class Compiler
 					TypeWrapper wrapper = GetWrapperType(constType, out dummy);
 					wrapper.GetMethodWrapper("valueOf", "(" + constType.SigName + ")" + wrapper.SigName, false).EmitCall(ilgen);
 				}
-				if (targetType.IsPrimitive)
+				if (targetType.IsUnloadable)
+				{
+					// do nothing
+				}
+				else if (targetType.IsPrimitive)
 				{
 					string unbox;
 					TypeWrapper wrapper = GetWrapperType(targetType, out unbox);
@@ -3435,6 +3439,10 @@ sealed class Compiler
 				if(declaringType.IsInterface)
 				{
 					ilGenerator.EmitAssertType(declaringType.TypeAsTBD);
+				}
+				else if(declaringType.IsNonPrimitiveValueType)
+				{
+					ilGenerator.Emit(OpCodes.Unbox, declaringType.TypeAsTBD);
 				}
 				else
 				{
@@ -3743,6 +3751,18 @@ sealed class Compiler
 #endif
 			FieldBuilder fb = compiler.context.DefineMethodHandleInvokeCacheField(typeofInvokeCache.MakeGenericType(delegateType));
 			ilgen.Emit(OpCodes.Ldloc, temps[0]);
+			if (HasUnloadable(cpi.GetArgTypes(), cpi.GetRetType()))
+			{
+				// TODO consider sharing the cache for the same signatures
+				ilgen.Emit(OpCodes.Ldsflda, compiler.context.DefineDynamicMethodTypeCacheField());
+				ilgen.Emit(OpCodes.Ldstr, cpi.Signature);
+				compiler.context.EmitCallerID(ilgen, compiler.m.IsLambdaFormCompiled);
+				ilgen.Emit(OpCodes.Call, ByteCodeHelperMethods.DynamicLoadMethodType);
+			}
+			else
+			{
+				ilgen.Emit(OpCodes.Ldnull);
+			}
 			ilgen.Emit(OpCodes.Ldsflda, fb);
 			ilgen.Emit(OpCodes.Call, mi);
 			for (int i = 0; i < args.Length; i++)

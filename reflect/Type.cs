@@ -1,5 +1,5 @@
 /*
-  Copyright (C) 2009-2013 Jeroen Frijters
+  Copyright (C) 2009-2015 Jeroen Frijters
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -46,9 +46,10 @@ namespace IKVM.Reflection
 		public static readonly Type[] EmptyTypes = Empty<Type>.Array;
 		protected readonly Type underlyingType;
 		protected TypeFlags typeFlags;
+		private byte sigElementType;	// only used if (__IsBuiltIn || HasElementType || __IsFunctionPointer || IsGenericParameter)
 
 		[Flags]
-		protected enum TypeFlags
+		protected enum TypeFlags : ushort
 		{
 			// for use by TypeBuilder or TypeDefImpl
 			IsGenericTypeDefinition = 1,
@@ -74,6 +75,10 @@ namespace IKVM.Reflection
 			ContainsMissingType_Yes = 512,
 			ContainsMissingType_No = 256 | 512,
 			ContainsMissingType_Mask = 256 | 512,
+
+			// built-in type support
+			PotentialBuiltIn = 1024,
+			BuiltIn = 2048,
 		}
 
 		// prevent subclassing by outsiders
@@ -87,6 +92,12 @@ namespace IKVM.Reflection
 			System.Diagnostics.Debug.Assert(underlyingType.underlyingType == underlyingType);
 			this.underlyingType = underlyingType;
 			this.typeFlags = underlyingType.typeFlags;
+		}
+
+		internal Type(byte sigElementType)
+			: this()
+		{
+			this.sigElementType = sigElementType;
 		}
 
 		public static Binder DefaultBinder
@@ -181,34 +192,34 @@ namespace IKVM.Reflection
 			get { throw new InvalidOperationException(); }
 		}
 
-		public virtual bool HasElementType
+		public bool HasElementType
 		{
-			get { return false; }
+			get { return IsArray || IsByRef || IsPointer; }
 		}
 
-		public virtual bool IsArray
+		public bool IsArray
 		{
-			get { return false; }
+			get { return sigElementType == Signature.ELEMENT_TYPE_ARRAY || sigElementType == Signature.ELEMENT_TYPE_SZARRAY; }
 		}
 
-		public virtual bool __IsVector
+		public bool __IsVector
 		{
-			get { return false; }
+			get { return sigElementType == Signature.ELEMENT_TYPE_SZARRAY; }
 		}
 
-		public virtual bool IsByRef
+		public bool IsByRef
 		{
-			get { return false; }
+			get { return sigElementType == Signature.ELEMENT_TYPE_BYREF; }
 		}
 
-		public virtual bool IsPointer
+		public bool IsPointer
 		{
-			get { return false; }
+			get { return sigElementType == Signature.ELEMENT_TYPE_PTR; }
 		}
 
-		public virtual bool __IsFunctionPointer
+		public bool __IsFunctionPointer
 		{
-			get { return false; }
+			get { return sigElementType == Signature.ELEMENT_TYPE_FNPTR; }
 		}
 
 		public virtual bool IsValueType
@@ -222,9 +233,9 @@ namespace IKVM.Reflection
 			}
 		}
 
-		public virtual bool IsGenericParameter
+		public bool IsGenericParameter
 		{
-			get { return false; }
+			get { return sigElementType == Signature.ELEMENT_TYPE_VAR || sigElementType == Signature.ELEMENT_TYPE_MVAR; }
 		}
 
 		public virtual int GenericParameterPosition
@@ -247,14 +258,19 @@ namespace IKVM.Reflection
 			get { return null; }
 		}
 
-		public virtual string __Name
+		internal virtual TypeName TypeName
 		{
 			get { throw new InvalidOperationException(); }
 		}
 
-		public virtual string __Namespace
+		public string __Name
 		{
-			get { throw new InvalidOperationException(); }
+			get { return TypeName.Name; }
+		}
+
+		public string __Namespace
+		{
+			get { return TypeName.Namespace; }
 		}
 
 		public abstract override string Name
@@ -1064,7 +1080,7 @@ namespace IKVM.Reflection
 		{
 			foreach (Type type in __GetDeclaredTypes())
 			{
-				if (type.__Namespace == name.Namespace && type.__Name == name.Name)
+				if (type.TypeName == name)
 				{
 					return type;
 				}
@@ -1076,7 +1092,7 @@ namespace IKVM.Reflection
 		{
 			foreach (Type type in __GetDeclaredTypes())
 			{
-				if (new TypeName(type.__Namespace, type.__Name).ToLowerInvariant() == lowerCaseName)
+				if (type.TypeName.ToLowerInvariant() == lowerCaseName)
 				{
 					return type;
 				}
@@ -1222,23 +1238,89 @@ namespace IKVM.Reflection
 		{
 			get
 			{
-				Universe u = this.Universe;
-				return this == u.System_Boolean
-					|| this == u.System_Byte
-					|| this == u.System_SByte
-					|| this == u.System_Int16
-					|| this == u.System_UInt16
-					|| this == u.System_Int32
-					|| this == u.System_UInt32
-					|| this == u.System_Int64
-					|| this == u.System_UInt64
-					|| this == u.System_IntPtr
-					|| this == u.System_UIntPtr
-					|| this == u.System_Char
-					|| this == u.System_Double
-					|| this == u.System_Single
-					;
+				return __IsBuiltIn
+					&& ((sigElementType >= Signature.ELEMENT_TYPE_BOOLEAN && sigElementType <= Signature.ELEMENT_TYPE_R8)
+						|| sigElementType == Signature.ELEMENT_TYPE_I
+						|| sigElementType == Signature.ELEMENT_TYPE_U);
 			}
+		}
+
+		public bool __IsBuiltIn
+		{
+			get
+			{
+				return (typeFlags & (TypeFlags.BuiltIn | TypeFlags.PotentialBuiltIn)) != 0
+					&& ((typeFlags & TypeFlags.BuiltIn) != 0 || ResolvePotentialBuiltInType());
+			}
+		}
+
+		internal byte SigElementType
+		{
+			get
+			{
+				// this property can only be called after __IsBuiltIn, HasElementType, __IsFunctionPointer or IsGenericParameter returned true
+				System.Diagnostics.Debug.Assert((typeFlags & TypeFlags.BuiltIn) != 0 || HasElementType || __IsFunctionPointer || IsGenericParameter);
+				return sigElementType;
+			}
+		}
+
+		private bool ResolvePotentialBuiltInType()
+		{
+			// [ECMA 335] 8.2.2 Built-in value and reference types
+			typeFlags &= ~TypeFlags.PotentialBuiltIn;
+			Universe u = this.Universe;
+			switch (__Name)
+			{
+				case "Boolean":
+					return ResolvePotentialBuiltInType(u.System_Boolean, Signature.ELEMENT_TYPE_BOOLEAN);
+				case "Char":
+					return ResolvePotentialBuiltInType(u.System_Char, Signature.ELEMENT_TYPE_CHAR);
+				case "Object":
+					return ResolvePotentialBuiltInType(u.System_Object, Signature.ELEMENT_TYPE_OBJECT);
+				case "String":
+					return ResolvePotentialBuiltInType(u.System_String, Signature.ELEMENT_TYPE_STRING);
+				case "Single":
+					return ResolvePotentialBuiltInType(u.System_Single, Signature.ELEMENT_TYPE_R4);
+				case "Double":
+					return ResolvePotentialBuiltInType(u.System_Double, Signature.ELEMENT_TYPE_R8);
+				case "SByte":
+					return ResolvePotentialBuiltInType(u.System_SByte, Signature.ELEMENT_TYPE_I1);
+				case "Int16":
+					return ResolvePotentialBuiltInType(u.System_Int16, Signature.ELEMENT_TYPE_I2);
+				case "Int32":
+					return ResolvePotentialBuiltInType(u.System_Int32, Signature.ELEMENT_TYPE_I4);
+				case "Int64":
+					return ResolvePotentialBuiltInType(u.System_Int64, Signature.ELEMENT_TYPE_I8);
+				case "IntPtr":
+					return ResolvePotentialBuiltInType(u.System_IntPtr, Signature.ELEMENT_TYPE_I);
+				case "UIntPtr":
+					return ResolvePotentialBuiltInType(u.System_UIntPtr, Signature.ELEMENT_TYPE_U);
+				case "TypedReference":
+					return ResolvePotentialBuiltInType(u.System_TypedReference, Signature.ELEMENT_TYPE_TYPEDBYREF);
+				case "Byte":
+					return ResolvePotentialBuiltInType(u.System_Byte, Signature.ELEMENT_TYPE_U1);
+				case "UInt16":
+					return ResolvePotentialBuiltInType(u.System_UInt16, Signature.ELEMENT_TYPE_U2);
+				case "UInt32":
+					return ResolvePotentialBuiltInType(u.System_UInt32, Signature.ELEMENT_TYPE_U4);
+				case "UInt64":
+					return ResolvePotentialBuiltInType(u.System_UInt64, Signature.ELEMENT_TYPE_U8);
+				case "Void":	// [LAMESPEC] missing from ECMA list for some reason
+					return ResolvePotentialBuiltInType(u.System_Void, Signature.ELEMENT_TYPE_VOID);
+				default:
+					throw new InvalidOperationException();
+			}
+		}
+
+		private bool ResolvePotentialBuiltInType(Type builtIn, byte elementType)
+		{
+			if (this == builtIn)
+			{
+				typeFlags |= TypeFlags.BuiltIn;
+				this.sigElementType = elementType;
+				return true;
+			}
+			return false;
 		}
 
 		public bool IsEnum
@@ -2071,14 +2153,39 @@ namespace IKVM.Reflection
 			return this;
 		}
 
-		protected void MarkEnumOrValueType(string typeNamespace, string typeName)
+		protected void MarkKnownType(string typeNamespace, string typeName)
 		{
 			// we assume that mscorlib won't have nested types with these names,
 			// so we don't check that we're not a nested type
-			if (typeNamespace == "System"
-				&& (typeName == "Enum" || typeName == "ValueType"))
+			if (typeNamespace == "System")
 			{
-				typeFlags |= TypeFlags.PotentialEnumOrValueType;
+				switch (typeName)
+				{
+					case "Boolean":
+					case "Char":
+					case "Object":
+					case "String":
+					case "Single":
+					case "Double":
+					case "SByte":
+					case "Int16":
+					case "Int32":
+					case "Int64":
+					case "IntPtr":
+					case "UIntPtr":
+					case "TypedReference":
+					case "Byte":
+					case "UInt16":
+					case "UInt32":
+					case "UInt64":
+					case "Void":
+						typeFlags |= TypeFlags.PotentialBuiltIn;
+						break;
+					case "Enum":
+					case "ValueType":
+						typeFlags |= TypeFlags.PotentialEnumOrValueType;
+						break;
+				}
 			}
 		}
 
@@ -2087,7 +2194,7 @@ namespace IKVM.Reflection
 			if (this.Assembly == this.Universe.Mscorlib
 				|| this.Assembly.GetName().Name.Equals("mscorlib", StringComparison.OrdinalIgnoreCase)
 				// check if mscorlib forwards the type (.NETCore profile reference mscorlib forwards System.Enum and System.ValueType to System.Runtime.dll)
-				|| this.Universe.Mscorlib.FindType(new TypeName(__Namespace, __Name)) == this)
+				|| this.Universe.Mscorlib.FindType(TypeName) == this)
 			{
 				typeFlags = (typeFlags & ~TypeFlags.PotentialEnumOrValueType) | TypeFlags.EnumOrValueType;
 				return true;
@@ -2162,7 +2269,8 @@ namespace IKVM.Reflection
 		private int token;
 		private readonly CustomModifiers mods;
 
-		protected ElementHolderType(Type elementType, CustomModifiers mods)
+		protected ElementHolderType(Type elementType, CustomModifiers mods, byte sigElementType)
+			: base(sigElementType)
 		{
 			this.elementType = elementType;
 			this.mods = mods;
@@ -2203,11 +2311,6 @@ namespace IKVM.Reflection
 		public sealed override Type GetElementType()
 		{
 			return elementType;
-		}
-
-		public sealed override bool HasElementType
-		{
-			get { return true; }
 		}
 
 		public sealed override Module Module
@@ -2297,7 +2400,7 @@ namespace IKVM.Reflection
 		}
 
 		private ArrayType(Type type, CustomModifiers mods)
-			: base(type, mods)
+			: base(type, mods, Signature.ELEMENT_TYPE_SZARRAY)
 		{
 		}
 
@@ -2335,16 +2438,6 @@ namespace IKVM.Reflection
 		public override TypeAttributes Attributes
 		{
 			get { return TypeAttributes.Public | TypeAttributes.Sealed | TypeAttributes.Serializable; }
-		}
-
-		public override bool IsArray
-		{
-			get { return true; }
-		}
-
-		public override bool __IsVector
-		{
-			get { return true; }
 		}
 
 		public override int GetArrayRank()
@@ -2385,7 +2478,7 @@ namespace IKVM.Reflection
 		}
 
 		private MultiArrayType(Type type, int rank, int[] sizes, int[] lobounds, CustomModifiers mods)
-			: base(type, mods)
+			: base(type, mods, Signature.ELEMENT_TYPE_ARRAY)
 		{
 			this.rank = rank;
 			this.sizes = sizes;
@@ -2423,11 +2516,6 @@ namespace IKVM.Reflection
 		public override TypeAttributes Attributes
 		{
 			get { return TypeAttributes.Public | TypeAttributes.Sealed | TypeAttributes.Serializable; }
-		}
-
-		public override bool IsArray
-		{
-			get { return true; }
 		}
 
 		public override int GetArrayRank()
@@ -2609,7 +2697,7 @@ namespace IKVM.Reflection
 		}
 
 		private ByRefType(Type type, CustomModifiers mods)
-			: base(type, mods)
+			: base(type, mods, Signature.ELEMENT_TYPE_BYREF)
 		{
 		}
 
@@ -2633,11 +2721,6 @@ namespace IKVM.Reflection
 			get { return 0; }
 		}
 
-		public override bool IsByRef
-		{
-			get { return true; }
-		}
-
 		internal override string GetSuffix()
 		{
 			return "&";
@@ -2657,7 +2740,7 @@ namespace IKVM.Reflection
 		}
 
 		private PointerType(Type type, CustomModifiers mods)
-			: base(type, mods)
+			: base(type, mods, Signature.ELEMENT_TYPE_PTR)
 		{
 		}
 
@@ -2679,11 +2762,6 @@ namespace IKVM.Reflection
 		public override TypeAttributes Attributes
 		{
 			get { return 0; }
-		}
-
-		public override bool IsPointer
-		{
-			get { return true; }
 		}
 
 		internal override string GetSuffix()
@@ -3061,6 +3139,7 @@ namespace IKVM.Reflection
 		}
 
 		private FunctionPointerType(Universe universe, __StandAloneMethodSig sig)
+			: base(Signature.ELEMENT_TYPE_FNPTR)
 		{
 			this.universe = universe;
 			this.sig = sig;
@@ -3077,11 +3156,6 @@ namespace IKVM.Reflection
 		public override int GetHashCode()
 		{
 			return sig.GetHashCode();
-		}
-
-		public override bool __IsFunctionPointer
-		{
-			get { return true; }
 		}
 
 		public override __StandAloneMethodSig __MethodSignature
@@ -3138,13 +3212,16 @@ namespace IKVM.Reflection
 	sealed class MarkerType : Type
 	{
 		// used by CustomModifiers and SignatureHelper
-		internal static readonly Type ModOpt = new MarkerType();
-		internal static readonly Type ModReq = new MarkerType();
+		internal static readonly Type ModOpt = new MarkerType(Signature.ELEMENT_TYPE_CMOD_OPT);
+		internal static readonly Type ModReq = new MarkerType(Signature.ELEMENT_TYPE_CMOD_REQD);
 		// used by SignatureHelper
-		internal static readonly Type Sentinel = new MarkerType();
-		internal static readonly Type Pinned = new MarkerType();
+		internal static readonly Type Sentinel = new MarkerType(Signature.SENTINEL);
+		internal static readonly Type Pinned = new MarkerType(Signature.ELEMENT_TYPE_PINNED);
 
-		private MarkerType() { }
+		private MarkerType(byte sigElementType)
+			: base(sigElementType)
+		{
+		}
 
 		public override Type BaseType
 		{

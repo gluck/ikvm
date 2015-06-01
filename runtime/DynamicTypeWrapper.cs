@@ -462,6 +462,7 @@ namespace IKVM.Internal
 			internal abstract byte[] GetRawTypeAnnotations();
 			internal abstract byte[] GetMethodRawTypeAnnotations(int index);
 			internal abstract byte[] GetFieldRawTypeAnnotations(int index);
+			internal abstract TypeWrapper Host { get; }
 		}
 
 		private sealed class JavaTypeImpl : DynamicImpl
@@ -477,6 +478,7 @@ namespace IKVM.Internal
 			private bool finishInProgress;
 			private MethodBuilder clinitMethod;
 			private MethodBuilder finalizeMethod;
+			private int recursionCount;
 #if STATIC_COMPILER
 			private DynamicTypeWrapper enclosingClassWrapper;
 			private AnnotationBuilder annotationBuilder;
@@ -595,7 +597,7 @@ namespace IKVM.Internal
 					{
 						TypeWrapper fieldType = null;
 #if !STATIC_COMPILER
-						fieldType = ClassLoaderWrapper.GetBootstrapClassLoader().FieldTypeWrapperFromSig(fld.Signature);
+						fieldType = ClassLoaderWrapper.GetBootstrapClassLoader().FieldTypeWrapperFromSig(fld.Signature, LoadMode.LoadOrThrow);
 #endif
 						fields[i] = new ConstantFieldWrapper(wrapper, fieldType, fld.Name, fld.Signature, fld.Modifiers, null, fld.ConstantValue, MemberFlags.None);
 					}
@@ -1710,14 +1712,26 @@ namespace IKVM.Internal
 				// make sure all classes are loaded, before we start finishing the type. During finishing, we
 				// may not run any Java code, because that might result in a request to finish the type that we
 				// are in the process of finishing, and this would be a problem.
-				classFile.Link(wrapper);
-				for (int i = 0; i < fields.Length; i++)
+				// Prevent infinity recursion for broken class loaders by keeping a recursion count and falling
+				// back to late binding if we recurse more than twice.
+				LoadMode mode = System.Threading.Interlocked.Increment(ref recursionCount) > 2 || (JVM.DisableEagerClassLoading && wrapper.Name != "sun.reflect.misc.Trampoline")
+					? LoadMode.ReturnUnloadable
+					: LoadMode.Link;
+				try
 				{
-					fields[i].Link();
+					classFile.Link(wrapper, mode);
+					for (int i = 0; i < fields.Length; i++)
+					{
+						fields[i].Link(mode);
+					}
+					for (int i = 0; i < methods.Length; i++)
+					{
+						methods[i].Link(mode);
+					}
 				}
-				for (int i = 0; i < methods.Length; i++)
+				finally
 				{
-					methods[i].Link();
+					System.Threading.Interlocked.Decrement(ref recursionCount);
 				}
 				// this is the correct lock, FinishCore doesn't call any user code and mutates global state,
 				// so it needs to be protected by a lock.
@@ -1836,7 +1850,7 @@ namespace IKVM.Internal
 						finishedClinitMethod = type.GetMethod("__<clinit>", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
 					}
 #endif
-					finishedType = new FinishedTypeImpl(type, innerClassesTypeWrappers, declaringTypeWrapper, wrapper.ReflectiveModifiers, Metadata.Create(classFile), finishedClinitMethod, finalizeMethod);
+					finishedType = new FinishedTypeImpl(type, innerClassesTypeWrappers, declaringTypeWrapper, wrapper.ReflectiveModifiers, Metadata.Create(classFile), finishedClinitMethod, finalizeMethod, host);
 					return finishedType;
 				}
 #if !STATIC_COMPILER
@@ -3533,6 +3547,11 @@ namespace IKVM.Internal
 				Debug.Fail("Unreachable code");
 				return null;
 			}
+
+			internal override TypeWrapper Host
+			{
+				get { return host; }
+			}
 		}
 
 		private sealed class Metadata
@@ -3846,8 +3865,9 @@ namespace IKVM.Internal
 			private readonly MethodInfo clinitMethod;
 			private readonly MethodInfo finalizeMethod;
 			private readonly Metadata metadata;
+			private readonly TypeWrapper host;
 
-			internal FinishedTypeImpl(Type type, TypeWrapper[] innerclasses, TypeWrapper declaringTypeWrapper, Modifiers reflectiveModifiers, Metadata metadata, MethodInfo clinitMethod, MethodInfo finalizeMethod)
+			internal FinishedTypeImpl(Type type, TypeWrapper[] innerclasses, TypeWrapper declaringTypeWrapper, Modifiers reflectiveModifiers, Metadata metadata, MethodInfo clinitMethod, MethodInfo finalizeMethod, TypeWrapper host)
 			{
 				this.type = type;
 				this.innerclasses = innerclasses;
@@ -3856,6 +3876,7 @@ namespace IKVM.Internal
 				this.clinitMethod = clinitMethod;
 				this.finalizeMethod = finalizeMethod;
 				this.metadata = metadata;
+				this.host = host;
 			}
 
 			internal override TypeWrapper[] InnerClasses
@@ -3992,6 +4013,11 @@ namespace IKVM.Internal
 			internal override byte[] GetFieldRawTypeAnnotations(int index)
 			{
 				return Metadata.GetFieldRawTypeAnnotations(metadata, index);
+			}
+
+			internal override TypeWrapper Host
+			{
+				get { return host; }
 			}
 		}
 
@@ -6536,19 +6562,14 @@ namespace IKVM.Internal
 			MethodBuilder overrideStub = baseMethod.GetDefineMethodHelper().DefineMethod(this, typeBuilder, "__<overridestub>" + baseMethod.DeclaringType.Name + "::" + baseMethod.Name, MethodAttributes.Private | MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final);
 			typeBuilder.DefineMethodOverride(overrideStub, (MethodInfo)baseMethod.GetMethod());
 
-			Type stubret = baseMethod.ReturnTypeForDefineMethod;
-			Type[] stubargs = baseMethod.GetParametersForDefineMethod();
-			Type targetRet = targetMethod.ReturnTypeForDefineMethod;
-			Type[] targetArgs = targetMethod.GetParametersForDefineMethod();
+			TypeWrapper[] stubargs = baseMethod.GetParameters();
+			TypeWrapper[] targetArgs = targetMethod.GetParameters();
 			CodeEmitter ilgen = CodeEmitter.Create(overrideStub);
 			ilgen.Emit(OpCodes.Ldarg_0);
 			for (int i = 0; i < targetArgs.Length; i++)
 			{
 				ilgen.EmitLdarg(i + 1);
-				if (targetArgs[i] != stubargs[i])
-				{
-					ilgen.Emit(OpCodes.Castclass, targetArgs[i]);
-				}
+				ConvertStubArg(stubargs[i], targetArgs[i], ilgen);
 			}
 			if (target != null)
 			{
@@ -6558,12 +6579,31 @@ namespace IKVM.Internal
 			{
 				targetMethod.EmitCallvirt(ilgen);
 			}
-			if (targetRet != stubret)
-			{
-				ilgen.Emit(OpCodes.Castclass, stubret);
-			}
+			ConvertStubArg(targetMethod.ReturnType, baseMethod.ReturnType, ilgen);
 			ilgen.Emit(OpCodes.Ret);
 			ilgen.DoEmit();
+		}
+
+		private static void ConvertStubArg(TypeWrapper src, TypeWrapper dst, CodeEmitter ilgen)
+		{
+			if (src != dst)
+			{
+				if (dst.IsUnloadable)
+				{
+					if (!src.IsUnloadable && (src.IsGhost || src.IsNonPrimitiveValueType))
+					{
+						src.EmitConvSignatureTypeToStackType(ilgen);
+					}
+				}
+				else if (dst.IsGhost || dst.IsNonPrimitiveValueType)
+				{
+					dst.EmitConvStackTypeToSignatureType(ilgen, null);
+				}
+				else
+				{
+					dst.EmitCheckcast(ilgen);
+				}
+			}
 		}
 
 		private static void GetParameterNamesFromMP(ClassFile.Method m, string[] parameterNames)
@@ -7122,6 +7162,13 @@ namespace IKVM.Internal
 			return impl.GetFieldRawTypeAnnotations(Array.IndexOf(GetFields(), fw));
 		}
 
+#if !STATIC_COMPILER && !STUB_GENERATOR
+		internal override TypeWrapper Host
+		{
+			get { return impl.Host; }
+		}
+#endif
+
 		[Conditional("STATIC_COMPILER")]
 		internal void EmitLevel4Warning(HardError error, string message)
 		{
@@ -7234,7 +7281,7 @@ namespace IKVM.Internal
 					continue;
 				}
 				TypeWrapper caller = ClassLoaderWrapper.GetWrapperFromType(method.DeclaringType);
-				return CreateCallerID(caller);
+				return CreateCallerID(caller.Host ?? caller);
 			}
 		}
 

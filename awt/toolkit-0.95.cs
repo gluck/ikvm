@@ -777,12 +777,15 @@ namespace ikvm.awt
 
         protected internal override Object lazilyLoadDesktopProperty(String name)
         {
-            if ("win.defaultGUI.font".Equals(name))
+            switch (name)
             {
-                Font font = Control.DefaultFont;
-                return C2J.ConvertFont(font);
+                case "win.defaultGUI.font":
+                    return C2J.ConvertFont(Control.DefaultFont);
+                case "win.highContrast.on":
+                    return java.lang.Boolean.valueOf(SystemInformation.HighContrast);
+                default:
+                    return null;
             }
-            return null;
         }
 
         protected internal override java.awt.peer.MouseInfoPeer getMouseInfoPeer() {
@@ -1411,7 +1414,11 @@ namespace ikvm.awt
                                       int eventID,
                                       bool dispatchType)
         {
-            return base.postDropTargetEvent(component, x, y,
+            NetComponentPeer peer = (NetComponentPeer)component.getPeer();
+            Control control = peer.Control;
+            Point screenPt = new Point(x, y);
+            Point clientPt = control.PointToClient(screenPt);
+            return base.postDropTargetEvent(component, clientPt.X, clientPt.Y,
                                      dropAction, actions, formats, nativeCtxt, eventID, dispatchType);
         }
 
@@ -5537,7 +5544,27 @@ namespace ikvm.awt
                     else if (flavor.isFlavorTextType())
                     {
                         if (contents is string) 
+                        {
                             obj.SetText((string) transferable.getTransferData(flavor));
+                        }
+                        else
+                        {
+                            try
+                            {
+                                java.io.Reader reader = flavor.getReaderForText(transferable);
+                                java.io.StringWriter writer = new java.io.StringWriter();
+                                char[] buffer = new char[1024];
+                                int n;
+                                while ((n = reader.read(buffer)) != -1)
+                                {
+                                    writer.write(buffer, 0, n);
+                                }
+                                obj.SetText(writer.toString());
+                            }
+                            catch
+                            {
+                            }
+                        }
                     }
                     else if (java.awt.datatransfer.DataFlavor.imageFlavor.equals(flavor))
                     {

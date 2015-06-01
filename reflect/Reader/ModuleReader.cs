@@ -279,7 +279,7 @@ namespace IKVM.Reflection.Reader
 					}
 					else if (!type.IsNestedByFlags)
 					{
-						types.Add(new TypeName(type.__Namespace, type.__Name), type);
+						types.Add(type.TypeName, type);
 					}
 				}
 				// add forwarded types to forwardedTypes dictionary (because Module.GetType(string) should return them)
@@ -402,14 +402,14 @@ namespace IKVM.Reflection.Reader
 						case AssemblyRefTable.Index:
 							{
 								Assembly assembly = ResolveAssemblyRef((scope & 0xFFFFFF) - 1);
-								TypeName typeName = GetTypeName(TypeRef.records[index].TypeNameSpace, TypeRef.records[index].TypeName);
+								TypeName typeName = GetTypeName(TypeRef.records[index].TypeNamespace, TypeRef.records[index].TypeName);
 								typeRefs[index] = assembly.ResolveType(this, typeName);
 								break;
 							}
 						case TypeRefTable.Index:
 							{
 								Type outer = ResolveType(scope, null);
-								TypeName typeName = GetTypeName(TypeRef.records[index].TypeNameSpace, TypeRef.records[index].TypeName);
+								TypeName typeName = GetTypeName(TypeRef.records[index].TypeNamespace, TypeRef.records[index].TypeName);
 								typeRefs[index] = outer.ResolveNestedType(this, typeName);
 								break;
 							}
@@ -432,7 +432,7 @@ namespace IKVM.Reflection.Reader
 								{
 									module = ResolveModuleRef(ModuleRef.records[(scope & 0xFFFFFF) - 1]);
 								}
-								TypeName typeName = GetTypeName(TypeRef.records[index].TypeNameSpace, TypeRef.records[index].TypeName);
+								TypeName typeName = GetTypeName(TypeRef.records[index].TypeNamespace, TypeRef.records[index].TypeName);
 								typeRefs[index] = module.FindType(typeName) ?? module.universe.GetMissingTypeOrThrow(this, module, null, typeName);
 								break;
 							}
@@ -583,7 +583,7 @@ namespace IKVM.Reflection.Reader
 			PopulateTypeDef();
 			foreach (Type type in types.Values)
 			{
-				if (new TypeName(type.__Namespace, type.__Name).ToLowerInvariant() == lowerCaseName)
+				if (type.TypeName.ToLowerInvariant() == lowerCaseName)
 				{
 					return type;
 				}
@@ -1241,7 +1241,7 @@ namespace IKVM.Reflection.Reader
 				if ((CustomAttribute.records[i].Parent >> 24) == TypeRefTable.Index)
 				{
 					int index = (CustomAttribute.records[i].Parent & 0xFFFFFF) - 1;
-					if (typeName == GetTypeName(TypeRef.records[index].TypeNameSpace, TypeRef.records[index].TypeName))
+					if (typeName == GetTypeName(TypeRef.records[index].TypeNamespace, TypeRef.records[index].TypeName))
 					{
 						list.Add(new CustomAttributeData(this, i));
 					}

@@ -322,16 +322,21 @@ static class Java_java_lang_Class
 			{
 				return null;
 			}
+			decl = decl.EnsureLoadable(wrapper.GetClassLoader());
 			if (!decl.IsAccessibleFrom(wrapper))
 			{
 				throw new IllegalAccessError(string.Format("tried to access class {0} from class {1}", decl.Name, wrapper.Name));
 			}
 			decl.Finish();
-			if (Array.IndexOf(decl.InnerClasses, wrapper) == -1)
+			TypeWrapper[] declInner = decl.InnerClasses;
+			for (int i = 0; i < declInner.Length; i++)
 			{
-				throw new IncompatibleClassChangeError(string.Format("{0} and {1} disagree on InnerClasses attribute", decl.Name, wrapper.Name));
+				if (declInner[i].Name == wrapper.Name && declInner[i].EnsureLoadable(decl.GetClassLoader()) == wrapper)
+				{
+					return decl.ClassObject;
+				}
 			}
-			return decl.ClassObject;
+			throw new IncompatibleClassChangeError(string.Format("{0} and {1} disagree on InnerClasses attribute", decl.Name, wrapper.Name));
 		}
 		catch (RetargetableJavaException x)
 		{
@@ -618,16 +623,13 @@ static class Java_java_lang_Class
 			java.lang.Class[] innerclasses = new java.lang.Class[wrappers.Length];
 			for (int i = 0; i < innerclasses.Length; i++)
 			{
-				if (wrappers[i].IsUnloadable)
+				TypeWrapper tw = wrappers[i].EnsureLoadable(wrapper.GetClassLoader());
+				if (!tw.IsAccessibleFrom(wrapper))
 				{
-					throw new java.lang.NoClassDefFoundError(wrappers[i].Name);
+					throw new IllegalAccessError(string.Format("tried to access class {0} from class {1}", tw.Name, wrapper.Name));
 				}
-				if (!wrappers[i].IsAccessibleFrom(wrapper))
-				{
-					throw new IllegalAccessError(string.Format("tried to access class {0} from class {1}", wrappers[i].Name, wrapper.Name));
-				}
-				wrappers[i].Finish();
-				innerclasses[i] = wrappers[i].ClassObject;
+				tw.Finish();
+				innerclasses[i] = tw.ClassObject;
 			}
 			return innerclasses;
 		}
