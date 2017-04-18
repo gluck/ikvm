@@ -197,17 +197,6 @@ static class Java_sun_invoke_anon_AnonymousClassLoader
 	}
 }
 
-static class Java_sun_invoke_util_ValueConversions
-{
-	// called from map.xml as a replacement for Class.isInstance() in sun.invoke.util.ValueConversions.castReference()
-	public static bool Class_isInstance(java.lang.Class clazz, object obj)
-	{
-		TypeWrapper tw = TypeWrapper.FromClass(clazz);
-		// handle the type system hole that is caused by arrays being both derived from cli.System.Array and directly from java.lang.Object
-		return tw.IsInstance(obj) || (tw == CoreClasses.cli.System.Object.Wrapper && obj is Array);
-	}
-}
-
 static class Java_sun_invoke_util_VerifyAccess
 {
 	// called from map.xml as a replacement for Class.getClassLoader() in sun.invoke.util.VerifyAccess.isTypeVisible()
@@ -311,6 +300,9 @@ static class Java_sun_security_provider_NativeSeedGenerator
 		{
 			RNGCryptoServiceProvider csp = new RNGCryptoServiceProvider();
 			csp.GetBytes(result);
+#if NET_4_0
+			csp.Dispose();
+#endif
 			return true;
 		}
 		catch (CryptographicException)
@@ -359,27 +351,22 @@ static class Java_com_sun_java_util_jar_pack_NativeUnpack
 
 static class Java_com_sun_security_auth_module_NTSystem
 {
-	public static void getCurrent(object thisObj, bool debug)
+	public static void getCurrent(object thisObj, bool debug, ref string userName, ref string domain, ref string domainSID, ref string userSID, ref string[] groupIDs, ref string primaryGroupID)
 	{
 		WindowsIdentity id = WindowsIdentity.GetCurrent();
 		string[] name = id.Name.Split('\\');
-		SetField(thisObj, "userName", name[1]);
-		SetField(thisObj, "domain", name[0]);
-		SetField(thisObj, "domainSID", id.User.AccountDomainSid.Value);
-		SetField(thisObj, "userSID", id.User.Value);
+		userName = name[1];
+		domain = name[0];
+		domainSID = id.User.AccountDomainSid.Value;
+		userSID = id.User.Value;
 		string[] groups = new string[id.Groups.Count];
 		for (int i = 0; i < groups.Length; i++)
 		{
 			groups[i] = id.Groups[i].Value;
 		}
-		SetField(thisObj, "groupIDs", groups);
+		groupIDs = groups;
 		// HACK it turns out that Groups[0] is the primary group, but AFAIK this is not documented anywhere
-		SetField(thisObj, "primaryGroupID", groups[0]);
-	}
-
-	private static void SetField(object thisObj, string field, object value)
-	{
-		thisObj.GetType().GetField(field, BindingFlags.NonPublic | BindingFlags.Instance).SetValue(thisObj, value);
+		primaryGroupID = groups[0];
 	}
 
 	public static long getImpersonationToken0(object thisObj)
@@ -547,6 +534,7 @@ static class Java_java_awt_SplashScreen
 	public static String _getImageFileName(long splashPtr) { return null; }
 	public static String _getImageJarName(long splashPtr) { return null; }
 	public static bool _setImageData(long splashPtr, byte[] data) { return false; }
+	public static float _getScaleFactor(long SplashPtr) { return 1; }
 }
 
 static class Java_java_awt_TextArea
@@ -617,4 +605,31 @@ static class Java_java_awt_image_SinglePixelPackedSampleModel
 static class Java_java_awt_image_SampleModel
 {
 	public static void initIDs() { }
+}
+
+static class Java_sun_net_ExtendedOptionsImpl
+{
+	public static void init()
+	{
+	}
+
+	public static void setFlowOption(java.io.FileDescriptor fd, object f)
+	{
+#if !FIRST_PASS
+		throw new java.lang.UnsupportedOperationException();
+#endif
+	}
+
+	public static void getFlowOption(java.io.FileDescriptor fd, object f)
+	{
+#if !FIRST_PASS
+		throw new java.lang.UnsupportedOperationException();
+#endif
+	}
+
+	public static bool flowSupported()
+	{
+		// We don't support this. Solaris only functionality.
+		return false;
+	}
 }

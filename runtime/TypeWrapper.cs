@@ -1948,6 +1948,7 @@ namespace IKVM.Internal
 		ClassFormatError = 16,
 		HasUnsupportedAbstractMethods = 32,
 		Anonymous = 64,
+		Linked = 128,
 	}
 
 	static class NamePrefix
@@ -3123,24 +3124,51 @@ namespace IKVM.Internal
 		}
 #endif
 
-		internal abstract TypeWrapper[] Interfaces
+		internal virtual TypeWrapper[] Interfaces
 		{
-			get;
+			get { return EmptyArray; }
 		}
 
 		// NOTE this property can only be called for finished types!
-		internal abstract TypeWrapper[] InnerClasses
+		internal virtual TypeWrapper[] InnerClasses
 		{
-			get;
+			get { return EmptyArray; }
 		}
 
 		// NOTE this property can only be called for finished types!
-		internal abstract TypeWrapper DeclaringTypeWrapper
+		internal virtual TypeWrapper DeclaringTypeWrapper
 		{
-			get;
+			get { return null; }
 		}
 
-		internal abstract void Finish();
+		internal virtual void Finish()
+		{
+		}
+
+		internal void LinkAll()
+		{
+			if ((flags & TypeFlags.Linked) == 0)
+			{
+				TypeWrapper tw = BaseTypeWrapper;
+				if (tw != null)
+				{
+					tw.LinkAll();
+				}
+				foreach (TypeWrapper iface in Interfaces)
+				{
+					iface.LinkAll();
+				}
+				foreach (MethodWrapper mw in GetMethods())
+				{
+					mw.Link();
+				}
+				foreach (FieldWrapper fw in GetFields())
+				{
+					fw.Link();
+				}
+				SetTypeFlag(TypeFlags.Linked);
+			}
+		}
 
 #if !STATIC_COMPILER
 		[Conditional("DEBUG")]
@@ -3627,6 +3655,13 @@ namespace IKVM.Internal
 		{
 			get
 			{
+#if STATIC_COMPILER
+				if (missingType != null)
+				{
+					StaticCompiler.IssueMissingTypeMessage(missingType);
+					return TypeWrapper.EmptyArray;
+				}
+#endif
 				throw new InvalidOperationException("get_Interfaces called on UnloadableTypeWrapper: " + Name);
 			}
 		}
@@ -3747,34 +3782,6 @@ namespace IKVM.Internal
 			}
 		}
 
-		internal override TypeWrapper[] Interfaces
-		{
-			get
-			{
-				return TypeWrapper.EmptyArray;
-			}
-		}
-
-		internal override TypeWrapper[] InnerClasses
-		{
-			get
-			{
-				return TypeWrapper.EmptyArray;
-			}
-		}
-
-		internal override TypeWrapper DeclaringTypeWrapper
-		{
-			get
-			{
-				return null;
-			}
-		}
-
-		internal override void Finish()
-		{
-		}
-
 		public override string ToString()
 		{
 			return "PrimitiveTypeWrapper[" + sigName + "]";
@@ -3784,7 +3791,7 @@ namespace IKVM.Internal
 	class CompiledTypeWrapper : TypeWrapper
 	{
 		private readonly Type type;
-		private TypeWrapper baseTypeWrapper;
+		private TypeWrapper baseTypeWrapper = VerifierTypeWrapper.Null;
 		private volatile TypeWrapper[] interfaces;
 		private MethodInfo clinitMethod;
 		private volatile bool clinitMethodSet;
@@ -4074,7 +4081,14 @@ namespace IKVM.Internal
 
 		internal override TypeWrapper BaseTypeWrapper
 		{
-			get { return baseTypeWrapper ?? (baseTypeWrapper = GetBaseTypeWrapper(type)); }
+			get
+			{
+				if (baseTypeWrapper != VerifierTypeWrapper.Null)
+				{
+					return baseTypeWrapper;
+				}
+				return baseTypeWrapper = GetBaseTypeWrapper(type);
+			}
 		}
 
 		internal override ClassLoaderWrapper GetClassLoader()
@@ -5101,18 +5115,6 @@ namespace IKVM.Internal
 			}
 		}
 
-		internal override void Finish()
-		{
-			if(BaseTypeWrapper != null)
-			{
-				BaseTypeWrapper.Finish();
-			}
-			foreach(TypeWrapper tw in this.Interfaces)
-			{
-				tw.Finish();
-			}
-		}
-
 #if EMITTERS
 		internal override void EmitRunClassConstructor(CodeEmitter ilgen)
 		{
@@ -5477,22 +5479,6 @@ namespace IKVM.Internal
 			}
 		}
 
-		internal override TypeWrapper[] InnerClasses
-		{
-			get
-			{
-				return TypeWrapper.EmptyArray;
-			}
-		}
-
-		internal override TypeWrapper DeclaringTypeWrapper
-		{
-			get
-			{
-				return null;
-			}
-		}
-
 		internal override Type TypeAsTBD
 		{
 			get
@@ -5787,20 +5773,6 @@ namespace IKVM.Internal
 				}
 				return interfaces;
 			}
-		}
-
-		internal override TypeWrapper[] InnerClasses
-		{
-			get { return TypeWrapper.EmptyArray; }
-		}
-
-		internal override TypeWrapper DeclaringTypeWrapper
-		{
-			get { return null; }
-		}
-
-		internal override void Finish()
-		{
 		}
 
 		protected override void LazyPublishMembers()

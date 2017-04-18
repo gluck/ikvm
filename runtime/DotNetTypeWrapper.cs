@@ -57,7 +57,6 @@ namespace IKVM.Internal
 		private volatile TypeWrapper[] innerClasses;
 		private TypeWrapper outerClass;
 		private volatile TypeWrapper[] interfaces;
-		private volatile bool finished;
 
 		private static Modifiers GetModifiers(Type type)
 		{
@@ -313,28 +312,9 @@ namespace IKVM.Internal
 				get { return type.IsInterface ? null : CoreClasses.java.lang.Object.Wrapper; }
 			}
 
-			internal override TypeWrapper DeclaringTypeWrapper
-			{
-				get { return null; }
-			}
-
-			internal override TypeWrapper[] InnerClasses
-			{
-				get { return TypeWrapper.EmptyArray; }
-			}
-
-			internal override TypeWrapper[] Interfaces
-			{
-				get { return TypeWrapper.EmptyArray; }
-			}
-
 			internal override Type TypeAsTBD
 			{
 				get { return type; }
-			}
-
-			internal override void Finish()
-			{
 			}
 
 			internal override ClassLoaderWrapper GetClassLoader()
@@ -418,29 +398,9 @@ namespace IKVM.Internal
 				}
 			}
 
-			internal override void Finish()
-			{
-			}
-
 			internal override ClassLoaderWrapper GetClassLoader()
 			{
 				return DeclaringTypeWrapper.GetClassLoader();
-			}
-
-			internal override TypeWrapper[] InnerClasses
-			{
-				get
-				{
-					return TypeWrapper.EmptyArray;
-				}
-			}
-
-			internal override TypeWrapper[] Interfaces
-			{
-				get
-				{
-					return TypeWrapper.EmptyArray;
-				}
 			}
 
 			internal override Type TypeAsTBD
@@ -655,29 +615,9 @@ namespace IKVM.Internal
 				}
 			}
 
-			internal override void Finish()
-			{
-			}
-
 			internal override ClassLoaderWrapper GetClassLoader()
 			{
 				return DeclaringTypeWrapper.GetClassLoader();
-			}
-
-			internal override TypeWrapper[] InnerClasses
-			{
-				get
-				{
-					return TypeWrapper.EmptyArray;
-				}
-			}
-
-			internal override TypeWrapper[] Interfaces
-			{
-				get
-				{
-					return TypeWrapper.EmptyArray;
-				}
 			}
 
 			internal override Type TypeAsTBD
@@ -698,10 +638,6 @@ namespace IKVM.Internal
 		{
 			internal AttributeAnnotationTypeWrapperBase(string name)
 				: base(Modifiers.Public | Modifiers.Interface | Modifiers.Abstract | Modifiers.Annotation, name, null)
-			{
-			}
-
-			internal sealed override void Finish()
 			{
 			}
 
@@ -1089,14 +1025,6 @@ namespace IKVM.Internal
 					}
 				}
 
-				internal override TypeWrapper[] InnerClasses
-				{
-					get
-					{
-						return TypeWrapper.EmptyArray;
-					}
-				}
-
 				internal override Type TypeAsTBD
 				{
 					get
@@ -1230,14 +1158,6 @@ namespace IKVM.Internal
 					get
 					{
 						return declaringType;
-					}
-				}
-
-				internal override TypeWrapper[] InnerClasses
-				{
-					get
-					{
-						return TypeWrapper.EmptyArray;
 					}
 				}
 
@@ -2781,32 +2701,6 @@ namespace IKVM.Internal
 			ilgen.EmitCastclass(type);
 		}
 #endif // EMITTERS
-
-		internal override void Finish()
-		{
-			// we don't need locking, because Finish and Link are idempotent
-			if (finished)
-			{
-				return;
-			}
-			if (BaseTypeWrapper != null)
-			{
-				BaseTypeWrapper.Finish();
-			}
-			foreach (TypeWrapper tw in this.Interfaces)
-			{
-				tw.Finish();
-			}
-			foreach (MethodWrapper mw in GetMethods())
-			{
-				mw.Link();
-			}
-			foreach (FieldWrapper fw in GetFields())
-			{
-				fw.Link();
-			}
-			finished = true;
-		}
 
 		internal override MethodParametersEntry[] GetMethodParameters(MethodWrapper mw)
 		{

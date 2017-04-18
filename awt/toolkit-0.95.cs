@@ -287,8 +287,6 @@ namespace ikvm.awt
 
 	public sealed class NetToolkit : sun.awt.SunToolkit, ikvm.awt.IkvmToolkit, sun.awt.KeyboardFocusManagerPeerProvider
     {
-        public static readonly String DATA_TRANSFERER_CLASS_NAME = typeof(NetDataTransferer).AssemblyQualifiedName;
-
         private int resolution;
         private NetClipboard clipboard;
 		private bool eventQueueSynchronizationContext;
@@ -330,7 +328,6 @@ namespace ikvm.awt
 
         public NetToolkit()
         {
-            setDataTransfererClassName(DATA_TRANSFERER_CLASS_NAME);
         }
 
         /// <summary>
@@ -1038,6 +1035,11 @@ namespace ikvm.awt
 		public override java.awt.peer.FramePeer createLightweightFrame(sun.awt.LightweightFrame lf)
 		{
 			throw new NotImplementedException();
+		}
+
+		public override sun.awt.datatransfer.DataTransferer getDataTransferer()
+		{
+			return NetDataTransferer.getInstanceImpl();
 		}
 	}
 
@@ -1886,7 +1888,11 @@ namespace ikvm.awt
 		{
 			this.target = target;
 			this.paintArea = new RepaintArea();
-			java.awt.Container parent = SunToolkit.getNativeContainer(target);
+			// A window has an owner, but it does NOT have a container. 
+			// Component getNativeContainer() was changed in 8.2 so it returns null for Window
+			// We have to use getParent() instead
+			//java.awt.Container parent = SunToolkit.getNativeContainer(target);
+			java.awt.Component parent = SunToolkit.getHeavyweightComponent(target.getParent());
 			NetComponentPeer parentPeer = (NetComponentPeer)NetToolkit.targetToPeer(parent);
 			control = Create(parentPeer);
 			// fix for 5088782: check if window object is created successfully

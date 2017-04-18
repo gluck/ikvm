@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <!--
-  Copyright (C) 2002-2013 Jeroen Frijters
+  Copyright (C) 2002-2015 Jeroen Frijters
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -190,11 +190,13 @@
                 <include name="openjdk/java.lang.invoke.cs" />
                 <include name="openjdk/java.lang.reflect.cs" />
                 <include name="openjdk/java.net.cs" />
+                <include name="openjdk/java.net.SocketInputStream.cs" />
                 <include name="openjdk/java.nio.cs" />
                 <include name="openjdk/java.security.cs" />
                 <include name="openjdk/java.util.cs" />
                 <include name="openjdk/java.util.prefs.cs" />
                 <include name="openjdk/misc.cs" />
+                <include name="openjdk/NativeInvokerBytecodeGenerator.cs" />
                 <include name="openjdk/sun.management.cs" />
                 <include name="openjdk/sun.misc.cs" />
                 <include name="openjdk/sun.nio.ch.cs" />

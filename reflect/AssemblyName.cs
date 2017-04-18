@@ -23,7 +23,9 @@
 */
 using System;
 using System.Globalization;
+#if !NETSTANDARD
 using System.Configuration.Assemblies;
+#endif
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
@@ -32,7 +34,7 @@ using IKVM.Reflection.Reader;
 namespace IKVM.Reflection
 {
 	public sealed class AssemblyName
-#if !CORECLR
+#if !NETSTANDARD
 		: ICloneable
 #endif
 	{
@@ -176,11 +178,6 @@ namespace IKVM.Reflection
 		public string CultureName
 		{
 			get { return culture; }
-		}
-
-		internal string Culture
-		{
-			get { return culture; }
 			set { culture = value; }
 		}
 
@@ -202,7 +199,7 @@ namespace IKVM.Reflection
 			set { codeBase = value; }
 		}
 
-#if !CORECLR
+#if !NETSTANDARD
 		public string EscapedCodeBase
 		{
 			get
@@ -402,7 +399,11 @@ namespace IKVM.Reflection
 			{
 				return publicKey;
 			}
-			byte[] hash = new SHA1Managed().ComputeHash(publicKey);
+			byte[] hash;
+			using (SHA1 sha1 = SHA1.Create())
+			{
+				hash = sha1.ComputeHash(publicKey);
+			}
 			byte[] token = new byte[8];
 			for (int i = 0; i < token.Length; i++)
 			{
@@ -451,7 +452,7 @@ namespace IKVM.Reflection
 			return b == null || b.Length == 0 ? b : (byte[])b.Clone();
 		}
 
-#if !CORECLR
+#if !NETSTANDARD
 		public static bool ReferenceMatchesDefinition(AssemblyName reference, AssemblyName definition)
 		{
 			// HACK use the real AssemblyName to implement the (broken) ReferenceMatchesDefinition method

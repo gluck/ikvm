@@ -150,6 +150,7 @@ namespace IKVM.Reflection
 			Type[] args = new Type[br.ReadCompressedUInt()];
 			for (int i = 0; i < args.Length; i++)
 			{
+				CustomModifiers.Skip(br);
 				args[i] = ReadType(module, br, context);
 			}
 			return args;
@@ -464,7 +465,11 @@ namespace IKVM.Reflection
 					case CallingConvention.ThisCall:
 						bb.Write((byte)0x03);	// THISCALL
 						break;
+#if NETSTANDARD
+					case (CallingConvention)5:
+#else
 					case CallingConvention.FastCall:
+#endif
 						bb.Write((byte)0x04);	// FASTCALL
 						break;
 					default:

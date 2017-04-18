@@ -51,11 +51,13 @@ namespace IKVM.Reflection.Emit
 			methodBuilder.__SetSignature(returnType, returnTypeCustomModifiers, parameterTypes, parameterTypeCustomModifiers);
 		}
 
+#if !NETSTANDARD
 		[Obsolete("Please use __SetSignature(Type, CustomModifiers, Type[], CustomModifiers[]) instead.")]
 		public void __SetSignature(Type returnType, Type[] returnTypeRequiredCustomModifiers, Type[] returnTypeOptionalCustomModifiers, Type[] parameterTypes, Type[][] parameterTypeRequiredCustomModifiers, Type[][] parameterTypeOptionalCustomModifiers)
 		{
 			methodBuilder.SetSignature(returnType, returnTypeRequiredCustomModifiers, returnTypeOptionalCustomModifiers, parameterTypes, parameterTypeRequiredCustomModifiers, parameterTypeOptionalCustomModifiers);
 		}
+#endif
 
 		public ParameterBuilder DefineParameter(int position, ParameterAttributes attributes, string strParamName)
 		{
@@ -77,7 +79,7 @@ namespace IKVM.Reflection.Emit
 			methodBuilder.__AddDeclarativeSecurity(customBuilder);
 		}
 
-#if !CORECLR
+#if !NETSTANDARD
 		public void AddDeclarativeSecurity(System.Security.Permissions.SecurityAction securityAction, System.Security.PermissionSet permissionSet)
 		{
 			methodBuilder.AddDeclarativeSecurity(securityAction, permissionSet);

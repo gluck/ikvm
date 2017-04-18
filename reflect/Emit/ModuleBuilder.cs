@@ -79,13 +79,13 @@ namespace IKVM.Reflection.Emit
 		private struct ResourceWriterRecord
 		{
 			private readonly string name;
-#if !CORECLR
+#if !NETSTANDARD
 			private readonly ResourceWriter rw;
 #endif
 			private readonly Stream stream;
 			private readonly ResourceAttributes attributes;
 
-#if CORECLR
+#if NETSTANDARD
 			internal ResourceWriterRecord(string name, Stream stream, ResourceAttributes attributes)
 			{
 				this.name = name;
@@ -109,7 +109,7 @@ namespace IKVM.Reflection.Emit
 
 			internal void Emit(ModuleBuilder mb, int offset)
 			{
-#if !CORECLR
+#if !NETSTANDARD
 				if (rw != null)
 				{
 					rw.Generate();
@@ -142,7 +142,7 @@ namespace IKVM.Reflection.Emit
 
 			internal void Close()
 			{
-#if !CORECLR
+#if !NETSTANDARD
 				if (rw != null)
 				{
 					rw.Close();
@@ -395,11 +395,13 @@ namespace IKVM.Reflection.Emit
 			return moduleType.__DefineField(name, type, customModifiers, attributes);
 		}
 
+#if !NETSTANDARD
 		[Obsolete("Please use __DefineField(string, Type, CustomModifiers, FieldAttributes) instead.")]
 		public FieldBuilder __DefineField(string name, Type type, Type[] requiredCustomModifiers, Type[] optionalCustomModifiers, FieldAttributes attributes)
 		{
 			return moduleType.DefineField(name, type, requiredCustomModifiers, optionalCustomModifiers, attributes);
 		}
+#endif
 
 		public ConstructorBuilder __DefineModuleInitializer(MethodAttributes visibility)
 		{
@@ -516,7 +518,7 @@ namespace IKVM.Reflection.Emit
 			this.DeclSecurity.AddRecord(rec);
 		}
 
-#if !CORECLR
+#if !NETSTANDARD
 		internal void AddDeclarativeSecurity(int token, System.Security.Permissions.SecurityAction securityAction, System.Security.PermissionSet permissionSet)
 		{
 			// like Ref.Emit, we're using the .NET 1.x xml format
@@ -533,7 +535,11 @@ namespace IKVM.Reflection.Emit
 				// check for HostProtectionAttribute without SecurityAction
 				if (cab.ConstructorArgumentCount == 0)
 				{
+#if NETSTANDARD
+					action = 6;
+#else
 					action = (int)System.Security.Permissions.SecurityAction.LinkDemand;
+#endif
 				}
 				else
 				{
@@ -580,7 +586,7 @@ namespace IKVM.Reflection.Emit
 			resourceWriters.Add(new ResourceWriterRecord(name, stream, attribute));
 		}
 
-#if !CORECLR
+#if !NETSTANDARD
 		public IResourceWriter DefineResource(string name, string description)
 		{
 			return DefineResource(name, description, ResourceAttributes.Public);
@@ -979,7 +985,7 @@ namespace IKVM.Reflection.Emit
 			}
 			rec.PublicKeyOrToken = this.Blobs.Add(ByteBuffer.Wrap(publicKeyOrToken));
 			rec.Name = this.Strings.Add(name.Name);
-			rec.Culture = name.Culture == null ? 0 : this.Strings.Add(name.Culture);
+			rec.Culture = name.CultureName == null ? 0 : this.Strings.Add(name.CultureName);
 			if (name.hash != null)
 			{
 				rec.HashValue = this.Blobs.Add(ByteBuffer.Wrap(name.hash));
@@ -1133,7 +1139,7 @@ namespace IKVM.Reflection.Emit
 			}
 		}
 
-		internal void WriteMetadata(MetadataWriter mw, out int guidHeapOffset)
+		internal void WriteMetadata(MetadataWriter mw, out uint guidHeapOffset)
 		{
 			mw.Write(0x424A5342);			// Signature ("BSJB")
 			mw.Write((ushort)1);			// MajorVersion
@@ -1562,11 +1568,13 @@ namespace IKVM.Reflection.Emit
 			return stackReserve;
 		}
 
+#if !NETSTANDARD
 		[Obsolete("Use __StackReserve property.")]
 		public void __SetStackReserve(long stackReserve)
 		{
 			__StackReserve = stackReserve;
 		}
+#endif
 
 		internal ulong GetStackReserve(ulong defaultValue)
 		{

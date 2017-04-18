@@ -72,7 +72,7 @@ namespace IKVM.Reflection.Emit
 			get { return null; }
 		}
 
-		public override bool IsValueType
+		protected override bool IsValueTypeImpl
 		{
 			get { return (this.GenericParameterAttributes & GenericParameterAttributes.NotNullableValueTypeConstraint) != 0; }
 		}
@@ -138,6 +138,11 @@ namespace IKVM.Reflection.Emit
 		}
 
 		public override Type[] GetGenericParameterConstraints()
+		{
+			throw new NotImplementedException();
+		}
+
+		public override CustomModifiers[] __GetGenericParameterConstraintCustomModifiers()
 		{
 			throw new NotImplementedException();
 		}
@@ -579,7 +584,11 @@ namespace IKVM.Reflection.Emit
 			}
 			pack = (short)((int?)customBuilder.GetFieldValue("Pack") ?? 0);
 			size = (int?)customBuilder.GetFieldValue("Size") ?? 0;
+#if NETSTANDARD
+			CharSet charSet = customBuilder.GetFieldValue<CharSet>("CharSet") ?? (CharSet)1;
+#else
 			CharSet charSet = customBuilder.GetFieldValue<CharSet>("CharSet") ?? CharSet.None;
+#endif
 			attribs &= ~TypeAttributes.LayoutMask;
 			switch (layout)
 			{
@@ -596,11 +605,19 @@ namespace IKVM.Reflection.Emit
 			attribs &= ~TypeAttributes.StringFormatMask;
 			switch (charSet)
 			{
+#if NETSTANDARD
+				case (CharSet)1:
+#else
 				case CharSet.None:
+#endif
 				case CharSet.Ansi:
 					attribs |= TypeAttributes.AnsiClass;
 					break;
+#if NETSTANDARD
+				case (CharSet)4:
+#else
 				case CharSet.Auto:
+#endif
 					attribs |= TypeAttributes.AutoClass;
 					break;
 				case CharSet.Unicode:
@@ -650,7 +667,7 @@ namespace IKVM.Reflection.Emit
 			declarativeSecurity.Add(customBuilder);
 		}
 
-#if !CORECLR
+#if !NETSTANDARD
 		public void AddDeclarativeSecurity(System.Security.Permissions.SecurityAction securityAction, System.Security.PermissionSet permissionSet)
 		{
 			this.ModuleBuilder.AddDeclarativeSecurity(token, securityAction, permissionSet);
@@ -1065,6 +1082,30 @@ namespace IKVM.Reflection.Emit
 		{
 			get { return IsCreated(); }
 		}
+
+		protected override bool IsValueTypeImpl
+		{
+			get
+			{
+				Type baseType = this.BaseType;
+				if (baseType != null && baseType.IsEnumOrValueType && !this.IsEnumOrValueType)
+				{
+					if (IsCreated())
+					{
+						typeFlags |= TypeFlags.ValueType;
+					}
+					return true;
+				}
+				else
+				{
+					if (IsCreated())
+					{
+						typeFlags |= TypeFlags.NotValueType;
+					}
+					return false;
+				}
+			}
+		}
 	}
 
 	sealed class BakedType : TypeInfo
@@ -1198,6 +1239,11 @@ namespace IKVM.Reflection.Emit
 		internal override bool IsBaked
 		{
 			get { return true; }
+		}
+
+		protected override bool IsValueTypeImpl
+		{
+			get { return underlyingType.IsValueType; }
 		}
 	}
 }

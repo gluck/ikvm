@@ -92,14 +92,14 @@ namespace IKVM.Reflection.Reader
 			internal Type GetType(ModuleReader module)
 			{
 				// guard against circular type forwarding
-				if (type == MarkerType.Pinned)
+				if (type == MarkerType.LazyResolveInProgress)
 				{
 					TypeName typeName = module.GetTypeName(module.ExportedType.records[index].TypeNamespace, module.ExportedType.records[index].TypeName);
 					return module.universe.GetMissingTypeOrThrow(module, module, null, typeName).SetCyclicTypeForwarder();
 				}
 				else if (type == null)
 				{
-					type = MarkerType.Pinned;
+					type = MarkerType.LazyResolveInProgress;
 					type = module.ResolveExportedType(index);
 				}
 				return type;
@@ -452,11 +452,29 @@ namespace IKVM.Reflection.Reader
 				if (type == null)
 				{
 					TrackingGenericContext tc = context == null ? null : new TrackingGenericContext(context);
-					type = Signature.ReadTypeSpec(this, ByteReader.FromBlob(blobHeap, TypeSpec.records[index]), tc);
+					typeSpecs[index] = MarkerType.LazyResolveInProgress;
+					try
+					{
+						type = Signature.ReadTypeSpec(this, ByteReader.FromBlob(blobHeap, TypeSpec.records[index]), tc);
+					}
+					finally
+					{
+						typeSpecs[index] = null;
+					}
 					if (tc == null || !tc.IsUsed)
 					{
 						typeSpecs[index] = type;
 					}
+				}
+				else if (type == MarkerType.LazyResolveInProgress)
+				{
+					if (universe.MissingMemberResolution)
+					{
+						return universe.GetMissingTypeOrThrow(this, this, null, new TypeName(null, "Cyclic TypeSpec " + metadataToken.ToString("X")))
+							.SetCyclicTypeSpec()
+							.SetMetadataTokenForMissing(metadataToken, 0);
+					}
+					throw new BadImageFormatException("Cyclic TypeSpec " + metadataToken.ToString("X"));
 				}
 				return type;
 			}
@@ -875,7 +893,7 @@ namespace IKVM.Reflection.Reader
 				{
 					return field;
 				}
-#if CORECLR
+#if NETSTANDARD
 				throw new MissingFieldException(org.ToString() + "." + name);
 #else
 				throw new MissingFieldException(org.ToString(), name);
@@ -898,7 +916,7 @@ namespace IKVM.Reflection.Reader
 				{
 					return method;
 				}
-#if CORECLR
+#if NETSTANDARD
 				throw new MissingMethodException(org.ToString() + "." + name);
 #else
 				throw new MissingMethodException(org.ToString(), name);
@@ -995,7 +1013,7 @@ namespace IKVM.Reflection.Reader
 									FileStream fs = new FileStream(fileName, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
 									if (fs.Length == 0)
 									{
-										fs.Close();
+										fs.Dispose();
 										return null;
 									}
 									return fs;
@@ -1052,11 +1070,11 @@ namespace IKVM.Reflection.Reader
 				}
 				if (AssemblyRef.records[i].Culture != 0)
 				{
-					name.Culture = GetString(AssemblyRef.records[i].Culture);
+					name.CultureName = GetString(AssemblyRef.records[i].Culture);
 				}
 				else
 				{
-					name.Culture = "";
+					name.CultureName = "";
 				}
 				if (AssemblyRef.records[i].HashValue != 0)
 				{
@@ -1254,7 +1272,7 @@ namespace IKVM.Reflection.Reader
 		{
 			if (stream != null)
 			{
-				stream.Close();
+				stream.Dispose();
 			}
 		}
 

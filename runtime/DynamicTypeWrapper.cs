@@ -497,12 +497,13 @@ namespace IKVM.Internal
 
 			internal void CreateStep1()
 			{
-				// process all methods
+				// process all methods (needs to be done first, because property fields depend on being able to lookup the accessor methods)
 				bool hasclinit = wrapper.BaseTypeWrapper == null ? false : wrapper.BaseTypeWrapper.HasStaticInitializer;
 				methods = new MethodWrapper[classFile.Methods.Length];
 				baseMethods = new MethodWrapper[classFile.Methods.Length][];
 				for (int i = 0; i < methods.Length; i++)
 				{
+					MemberFlags flags = MemberFlags.None;
 					ClassFile.Method m = classFile.Methods[i];
 					if (m.IsClassInitializer)
 					{
@@ -510,12 +511,9 @@ namespace IKVM.Internal
 						bool noop;
 						if (IsSideEffectFreeStaticInitializerOrNoop(m, out noop))
 						{
-							// because we cannot affect serialVersionUID computation (which is the only way the presence of a <clinit> can surface)
-							// we cannot do this optimization if the class is serializable but doesn't have a serialVersionUID
-							if (noop && (!wrapper.IsSerializable || classFile.HasSerialVersionUID))
+							if (noop)
 							{
-								methods[i] = new DummyMethodWrapper(wrapper);
-								continue;
+								flags |= MemberFlags.NoOp;
 							}
 						}
 						else
@@ -526,7 +524,6 @@ namespace IKVM.Internal
 						hasclinit = true;
 #endif
 					}
-					MemberFlags flags = MemberFlags.None;
 					if (m.IsInternal)
 					{
 						flags |= MemberFlags.InternalAccess;
@@ -1150,7 +1147,20 @@ namespace IKVM.Internal
 				noop = true;
 				for (int i = 0; i < m.Instructions.Length; i++)
 				{
-					NormalizedByteCode bc = m.Instructions[i].NormalizedOpCode;
+					NormalizedByteCode bc;
+					while ((bc = m.Instructions[i].NormalizedOpCode) == NormalizedByteCode.__goto)
+					{
+						int target = m.Instructions[i].TargetIndex;
+						if (target <= i)
+						{
+							// backward branch means we can't do anything
+							noop = false;
+							return false;
+						}
+						// we must skip the unused instructions because the "remove assertions" optimization
+						// uses a goto to remove the (now unused) code
+						i = target;
+					}
 					if (bc == NormalizedByteCode.__getstatic || bc == NormalizedByteCode.__putstatic)
 					{
 						ClassFile.ConstantPoolItemFieldref fld = classFile.SafeGetFieldref(m.Instructions[i].Arg1);
@@ -1179,10 +1189,6 @@ namespace IKVM.Internal
 								noop = false;
 								return false;
 							}
-							if (!field.IsFinal || !field.IsStatic)
-							{
-								noop = false;
-							}
 						}
 						else if (field.IsProperty && field.PropertyGetter != null)
 						{
@@ -1190,21 +1196,13 @@ namespace IKVM.Internal
 							return false;
 						}
 					}
-					else if (bc == NormalizedByteCode.__areturn ||
-						bc == NormalizedByteCode.__ireturn ||
-						bc == NormalizedByteCode.__lreturn ||
-						bc == NormalizedByteCode.__freturn ||
-						bc == NormalizedByteCode.__dreturn)
-					{
-						noop = false;
-						return false;
-					}
 					else if (ByteCodeMetaData.CanThrowException(bc))
 					{
 						noop = false;
 						return false;
 					}
 					else if (bc == NormalizedByteCode.__aconst_null
+						|| (bc == NormalizedByteCode.__iconst && m.Instructions[i].Arg1 == 0)
 						|| bc == NormalizedByteCode.__return
 						|| bc == NormalizedByteCode.__nop)
 					{
@@ -1520,6 +1518,18 @@ namespace IKVM.Internal
 				}
 				int fieldIndex = GetFieldIndex(fw);
 #if STATIC_COMPILER
+				if (wrapper.GetClassLoader().RemoveUnusedFields
+					&& fw.IsPrivate
+					&& fw.IsStatic
+					&& fw.IsFinal
+					&& !fw.IsSerialVersionUID
+					&& classFile.Fields[fieldIndex].Annotations == null
+					&& !classFile.IsReferenced(classFile.Fields[fieldIndex]))
+				{
+					// unused, so we skip it
+					Tracer.Info(Tracer.Compiler, "Unused field {0}::{1}", wrapper.Name, fw.Name);
+					return null;
+				}
 				// for compatibility with broken Java code that assumes that reflection returns the fields in class declaration
 				// order, we emit the fields in class declaration order in the .NET metadata (and then when we retrieve them
 				// using .NET reflection, we sort on metadata token.)
@@ -1691,9 +1701,11 @@ namespace IKVM.Internal
 
 			internal override DynamicImpl Finish()
 			{
-				if (wrapper.BaseTypeWrapper != null)
+				TypeWrapper baseTypeWrapper = wrapper.BaseTypeWrapper;
+				if (baseTypeWrapper != null)
 				{
-					wrapper.BaseTypeWrapper.Finish();
+					baseTypeWrapper.Finish();
+					baseTypeWrapper.LinkAll();
 				}
 				// NOTE there is a bug in the CLR (.NET 1.0 & 1.1 [1.2 is not yet available]) that
 				// causes the AppDomain.TypeResolve event to receive the incorrect type name for nested types.
@@ -1705,9 +1717,10 @@ namespace IKVM.Internal
 				// required in finished form, are finished explicitly here. It isn't clear what other types are
 				// required to be finished. I instrumented a static compilation of classpath.dll and this
 				// turned up no other cases of the TypeResolve event firing.
-				for (int i = 0; i < wrapper.Interfaces.Length; i++)
+				foreach (TypeWrapper iface in wrapper.interfaces)
 				{
-					wrapper.Interfaces[i].Finish();
+					iface.Finish();
+					iface.LinkAll();
 				}
 				// make sure all classes are loaded, before we start finishing the type. During finishing, we
 				// may not run any Java code, because that might result in a request to finish the type that we
@@ -2897,6 +2910,7 @@ namespace IKVM.Internal
 
 			internal override MethodBase LinkMethod(MethodWrapper mw)
 			{
+				Debug.Assert(mw != null);
 				if (mw is DelegateConstructorMethodWrapper)
 				{
 					((DelegateConstructorMethodWrapper)mw).DoLink(typeBuilder);
@@ -2906,7 +2920,13 @@ namespace IKVM.Internal
 				{
 					return ((DelegateInvokeStubMethodWrapper)mw).DoLink(typeBuilder);
 				}
-				Debug.Assert(mw != null);
+				if (mw.IsClassInitializer && mw.IsNoOp && (!wrapper.IsSerializable || HasSerialVersionUID))
+				{
+					// we don't need to emit the <clinit>, because it is empty and we're not serializable or have an explicit serialVersionUID
+					// (because we cannot affect serialVersionUID computation (which is the only way the presence of a <clinit> can surface)
+					// we cannot do this optimization if the class is serializable but doesn't have a serialVersionUID)
+					return null;
+				}
 				int index = GetMethodIndex(mw);
 				if (baseMethods[index] != null)
 				{
@@ -3059,6 +3079,21 @@ namespace IKVM.Internal
 				finally
 				{
 					Profiler.Leave("JavaTypeImpl.GenerateMethod");
+				}
+			}
+
+			private bool HasSerialVersionUID
+			{
+				get
+				{
+					foreach (FieldWrapper field in fields)
+					{
+						if (field.IsSerialVersionUID)
+						{
+							return true;
+						}
+					}
+					return false;
 				}
 			}
 
@@ -4373,8 +4408,13 @@ namespace IKVM.Internal
 									foreach (MethodInfo method in nativeCodeTypeMethods)
 									{
 										ParameterInfo[] param = method.GetParameters();
-										TypeWrapper[] match = new TypeWrapper[param.Length];
-										for (int j = 0; j < param.Length; j++)
+										int paramLength = param.Length;
+										while (paramLength != 0 && (param[paramLength - 1].IsIn || param[paramLength - 1].ParameterType.IsByRef))
+										{
+											paramLength--;
+										}
+										TypeWrapper[] match = new TypeWrapper[paramLength];
+										for (int j = 0; j < paramLength; j++)
 										{
 											match[j] = ClassLoaderWrapper.GetWrapperFromType(param[j].ParameterType);
 										}
@@ -4388,9 +4428,60 @@ namespace IKVM.Internal
 								}
 								if (nativeMethod != null)
 								{
+#if STATIC_COMPILER
 									for (int j = 0; j < nargs.Length; j++)
 									{
 										ilGenerator.EmitLdarg(j);
+									}
+									ParameterInfo[] param = nativeMethod.GetParameters();
+									for (int j = nargs.Length; j < param.Length; j++)
+									{
+										Type paramType = param[j].ParameterType;
+										TypeWrapper fieldTypeWrapper = ClassLoaderWrapper.GetWrapperFromType(paramType.IsByRef ? paramType.GetElementType() : paramType);
+										FieldWrapper field = wrapper.GetFieldWrapper(param[j].Name, fieldTypeWrapper.SigName);
+										if (field == null)
+										{
+											Console.Error.WriteLine("Error: Native method field binding not found: {0}.{1}{2}", classFile.Name, param[j].Name, fieldTypeWrapper.SigName);
+											StaticCompiler.errorCount++;
+											continue;
+										}
+										if (m.IsStatic && !field.IsStatic)
+										{
+											Console.Error.WriteLine("Error: Native method field binding cannot access instance field from static method: {0}.{1}{2}", classFile.Name, param[j].Name, fieldTypeWrapper.SigName);
+											StaticCompiler.errorCount++;
+											continue;
+										}
+										if (!field.IsAccessibleFrom(wrapper, wrapper, wrapper))
+										{
+											Console.Error.WriteLine("Error: Native method field binding not accessible: {0}.{1}{2}", classFile.Name, param[j].Name, fieldTypeWrapper.SigName);
+											StaticCompiler.errorCount++;
+											continue;
+										}
+										if (paramType.IsByRef && field.IsFinal)
+										{
+											Console.Error.WriteLine("Error: Native method field binding cannot use ByRef for final field: {0}.{1}{2}", classFile.Name, param[j].Name, fieldTypeWrapper.SigName);
+											StaticCompiler.errorCount++;
+											continue;
+										}
+										field.Link();
+										if (paramType.IsByRef && field.GetField() == null)
+										{
+											Console.Error.WriteLine("Error: Native method field binding cannot use ByRef on field without backing field: {0}.{1}{2}", classFile.Name, param[j].Name, fieldTypeWrapper.SigName);
+											StaticCompiler.errorCount++;
+											continue;
+										}
+										if (!field.IsStatic)
+										{
+											ilGenerator.EmitLdarg(0);
+										}
+										if (paramType.IsByRef)
+										{
+											ilGenerator.Emit(field.IsStatic ? OpCodes.Ldsflda : OpCodes.Ldflda, field.GetField());
+										}
+										else
+										{
+											field.EmitGet(ilGenerator);
+										}
 									}
 									ilGenerator.Emit(OpCodes.Call, nativeMethod);
 									TypeWrapper retTypeWrapper = methods[i].ReturnType;
@@ -4399,6 +4490,7 @@ namespace IKVM.Internal
 										ilGenerator.Emit(OpCodes.Castclass, retTypeWrapper.TypeAsTBD);
 									}
 									ilGenerator.Emit(OpCodes.Ret);
+#endif
 								}
 								else
 								{

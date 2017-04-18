@@ -22,6 +22,7 @@
   
 */
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Reflection;
 using System.Reflection.Emit;
@@ -29,6 +30,26 @@ using System.Runtime.CompilerServices;
 using IKVM.Internal;
 using java.lang.invoke;
 using jlClass = java.lang.Class;
+
+static class Java_java_lang_invoke_DirectMethodHandle
+{
+	// this is called from DirectMethodHandle.makeAllocator() via a map.xml prologue patch
+	public static DirectMethodHandle makeStringAllocator(MemberName member)
+	{
+#if FIRST_PASS
+		return null;
+#else
+		// we cannot construct strings via the standard two-pass approach (allocateObject followed by constructor invocation),
+		// so we special case string construction here (to call our static factory method instead)
+		if (member.getDeclaringClass() == CoreClasses.java.lang.String.Wrapper.ClassObject)
+		{
+			MethodType mt = member.getMethodType().changeReturnType(CoreClasses.java.lang.String.Wrapper.ClassObject);
+			return new DirectMethodHandle(mt, DirectMethodHandle._preparedLambdaForm(mt, MethodTypeForm.LF_INVSTATIC), member, null);
+		}
+		return null;
+#endif
+	}
+}
 
 static class Java_java_lang_invoke_MethodHandle
 {
@@ -76,35 +97,63 @@ static class Java_java_lang_invoke_MethodHandle
 	}
 }
 
-static class Java_java_lang_invoke_MethodHandleNatives
+static class Java_java_lang_invoke_MethodHandleImpl
 {
-	// called from Lookup.revealDirect() (instead of MethodHandle.internalMemberName()) via map.xml replace-method-call
-	public static MemberName internalMemberName(MethodHandle mh)
+	// hooked up via map.xml (as a replacement for makePairwiseConvertByEditor)
+	public static MethodHandle makePairwiseConvert(MethodHandle target, MethodType srcType, bool strict, bool monobox)
 	{
 #if FIRST_PASS
 		return null;
 #else
-		MemberName mn = mh.internalMemberName();
-		if (mn.isStatic() && mn.getName() == "<init>")
+		object[] convSpecs = MethodHandleImpl.computeValueConversions(srcType, target.type(), strict, monobox);
+		List<LambdaForm.Name> names = new List<LambdaForm.Name>();
+		names.Add(new LambdaForm.Name(0, LambdaForm.BasicType.L_TYPE));
+		for (int i = 0; i < srcType.parameterCount(); i++)
 		{
-			// HACK since we convert String constructors into static methods, we have to undo that here
-			// Note that the MemberName we return is only used for a security check and by InfoFromMemberName (a MethodHandleInfo implementation),
-			// so we don't need to make it actually invokable.
-			MemberName alt = new MemberName();
-			typeof(MemberName).GetField("clazz", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(alt, mn.getDeclaringClass());
-			typeof(MemberName).GetField("name", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(alt, mn.getName());
-			typeof(MemberName).GetField("type", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(alt, mn.getMethodType().changeReturnType(typeof(void)));
-			int flags = mn._flags();
-			flags -= MethodHandleNatives.Constants.MN_IS_METHOD;
-			flags += MethodHandleNatives.Constants.MN_IS_CONSTRUCTOR;
-			flags &= ~(MethodHandleNatives.Constants.MN_REFERENCE_KIND_MASK << MethodHandleNatives.Constants.MN_REFERENCE_KIND_SHIFT);
-			flags |= MethodHandleNatives.Constants.REF_newInvokeSpecial << MethodHandleNatives.Constants.MN_REFERENCE_KIND_SHIFT;
-			flags &= ~MethodHandleNatives.Constants.ACC_STATIC;
-			alt._flags(flags);
-			return alt;
+			names.Add(new LambdaForm.Name(i + 1, LambdaForm.BasicType.basicType(srcType.parameterType(i))));
 		}
-		return mn;
+		LambdaForm.Name[] invokeArgs = new LambdaForm.Name[srcType.parameterCount()];
+		for (int i = 0; i < invokeArgs.Length; i++)
+		{
+			object convSpec = convSpecs[i];
+			if (convSpec == null)
+			{
+				invokeArgs[i] = names[i + 1];
+			}
+			else
+			{
+				LambdaForm.Name temp = new LambdaForm.Name(convSpec as MethodHandle ?? MethodHandleImpl.Lazy.MH_castReference.bindTo(convSpec), names[i + 1]);
+				names.Add(temp);
+				invokeArgs[i] = temp;
+			}
+		}
+		names.Add(new LambdaForm.Name(target, invokeArgs));
+		if (convSpecs[convSpecs.Length - 1] != null)
+		{
+			object convSpec = convSpecs[convSpecs.Length - 1];
+			if (convSpec != java.lang.Void.TYPE)
+			{
+				names.Add(new LambdaForm.Name(convSpec as MethodHandle ?? MethodHandleImpl.Lazy.MH_castReference.bindTo(convSpec), names[names.Count - 1]));
+			}
+		}
+		if (target.type().returnType() == java.lang.Void.TYPE && srcType.returnType() != java.lang.Void.TYPE)
+		{
+			names.Add(new LambdaForm.Name(LambdaForm.constantZero(LambdaForm.BasicType.basicType(srcType.returnType()))));
+		}
+		LambdaForm form = new LambdaForm("PairwiseConvert", srcType.parameterCount() + 1, names.ToArray(), srcType.returnType() == java.lang.Void.TYPE ? LambdaForm.VOID_RESULT : LambdaForm.LAST_RESULT, false);
+		return new LightWeightMethodHandle(srcType, form);
 #endif
+	}
+}
+
+static class Java_java_lang_invoke_MethodHandleNatives
+{
+	// called from map.xml as a replacement for Class.isInstance() in java.lang.invoke.MethodHandleImpl.castReference()
+	public static bool Class_isInstance(java.lang.Class clazz, object obj)
+	{
+		TypeWrapper tw = TypeWrapper.FromClass(clazz);
+		// handle the type system hole that is caused by arrays being both derived from cli.System.Array and directly from java.lang.Object
+		return tw.IsInstance(obj) || (tw == CoreClasses.cli.System.Object.Wrapper && obj is Array);
 	}
 
 	public static void init(MemberName self, object refObj)
@@ -151,6 +200,10 @@ static class Java_java_lang_invoke_MethodHandleNatives
 		{
 			flags |= MethodHandleNatives.Constants.REF_invokeStatic << MethodHandleNatives.Constants.MN_REFERENCE_KIND_SHIFT;
 		}
+		else if (mw.IsConstructor && !wantSpecial)
+		{
+			flags |= MethodHandleNatives.Constants.REF_newInvokeSpecial << MethodHandleNatives.Constants.MN_REFERENCE_KIND_SHIFT;
+		}
 		else if (mw.IsPrivate || mw.IsFinal || mw.IsConstructor || wantSpecial)
 		{
 			flags |= MethodHandleNatives.Constants.REF_invokeSpecial << MethodHandleNatives.Constants.MN_REFERENCE_KIND_SHIFT;
@@ -174,16 +227,11 @@ static class Java_java_lang_invoke_MethodHandleNatives
 			{
 				parameters1[i] = mw.GetParameters()[i].ClassObject;
 			}
-			MethodType mt = MethodType.methodType(typeof(string), parameters1);
-			typeof(MemberName).GetField("type", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(self, mt);
-			self.vmtarget = CreateMemberNameDelegate(mw, null, false, mt);
-			flags -= MethodHandleNatives.Constants.REF_invokeSpecial << MethodHandleNatives.Constants.MN_REFERENCE_KIND_SHIFT;
-			flags += MethodHandleNatives.Constants.REF_invokeStatic << MethodHandleNatives.Constants.MN_REFERENCE_KIND_SHIFT;
-			flags -= MethodHandleNatives.Constants.MN_IS_CONSTRUCTOR;
-			flags += MethodHandleNatives.Constants.MN_IS_METHOD;
-			flags += MethodHandleNatives.Constants.ACC_STATIC;
+			MethodType mt = MethodType.methodType(PrimitiveTypeWrapper.VOID.ClassObject, parameters1);
+			self._type(mt);
 			self._flags(flags);
 			self._clazz(mw.DeclaringType.ClassObject);
+			self.vmtarget = CreateMemberNameDelegate(mw, null, false, self.getMethodType().changeReturnType(CoreClasses.java.lang.String.Wrapper.ClassObject));
 			return;
 		}
 		self._flags(flags);
@@ -311,8 +359,7 @@ static class Java_java_lang_invoke_MethodHandleNatives
 		}
 		if (mw.IsConstructor && mw.DeclaringType == CoreClasses.java.lang.String.Wrapper)
 		{
-			typeof(MemberName).GetField("type", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(self, self.getMethodType().changeReturnType(typeof(string)));
-			self.vmtarget = CreateMemberNameDelegate(mw, caller, false, self.getMethodType());
+			self.vmtarget = CreateMemberNameDelegate(mw, caller, false, self.getMethodType().changeReturnType(CoreClasses.java.lang.String.Wrapper.ClassObject));
 		}
 		else if (!mw.IsConstructor || invokeSpecial || newInvokeSpecial)
 		{
@@ -339,16 +386,6 @@ static class Java_java_lang_invoke_MethodHandleNatives
 		if (mw.HasCallerID || DynamicTypeWrapper.RequiresDynamicReflectionCallerClass(mw.DeclaringType.Name, mw.Name, mw.Signature))
 		{
 			self._flags(self._flags() | MemberName.CALLER_SENSITIVE);
-		}
-		if (mw.IsConstructor && mw.DeclaringType == CoreClasses.java.lang.String.Wrapper)
-		{
-			int flags = self._flags();
-			flags -= MethodHandleNatives.Constants.REF_invokeSpecial << MethodHandleNatives.Constants.MN_REFERENCE_KIND_SHIFT;
-			flags += MethodHandleNatives.Constants.REF_invokeStatic << MethodHandleNatives.Constants.MN_REFERENCE_KIND_SHIFT;
-			flags -= MethodHandleNatives.Constants.MN_IS_CONSTRUCTOR;
-			flags += MethodHandleNatives.Constants.MN_IS_METHOD;
-			flags += MethodHandleNatives.Constants.ACC_STATIC;
-			self._flags(flags);
 		}
 	}
 
@@ -470,7 +507,7 @@ static class Java_java_lang_invoke_MethodHandleNatives
 		MethodWrapper[] methods = TypeWrapper.FromClass(defc).GetMethods();
 		for (int i = skip, len = Math.Min(results.Length, methods.Length - skip); i < len; i++)
 		{
-			if (!methods[i].IsConstructor && methods[i].Name != StringConstants.CLINIT)
+			if (!methods[i].IsConstructor && !methods[i].IsClassInitializer)
 			{
 				results[i - skip] = new MemberName((java.lang.reflect.Method)methods[i].ToMethodOrConstructor(true), false);
 			}
@@ -608,7 +645,7 @@ static partial class MethodHandleUtil
 		return args;
 	}
 
-	private static Type[] GetParameterTypes(Type thisType, MethodBase mb)
+	internal static Type[] GetParameterTypes(Type thisType, MethodBase mb)
 	{
 		ParameterInfo[] pi = mb.GetParameters();
 		Type[] args = new Type[pi.Length + 1];
@@ -1027,25 +1064,7 @@ static partial class MethodHandleUtil
 
 		internal void Ldarg(int i)
 		{
-			i += firstArg;
-			if (i >= packedArgPos)
-			{
-				ilgen.EmitLdarga(packedArgPos);
-				int fieldPos = i - packedArgPos;
-				Type type = packedArgType;
-				while (fieldPos >= MaxArity || (fieldPos == MaxArity - 1 && IsPackedArgsContainer(type.GetField("t8").FieldType)))
-				{
-					FieldInfo field = type.GetField("t8");
-					type = field.FieldType;
-					ilgen.Emit(OpCodes.Ldflda, field);
-					fieldPos -= MaxArity - 1;
-				}
-				ilgen.Emit(OpCodes.Ldfld, type.GetField("t" + (1 + fieldPos)));
-			}
-			else
-			{
-				ilgen.EmitLdarg(i);
-			}
+			LoadPackedArg(ilgen, i, firstArg, packedArgPos, packedArgType);
 		}
 
 		internal void LoadCallerID()
@@ -1231,6 +1250,29 @@ static partial class MethodHandleUtil
 			type.voidAdapter = DynamicMethodBuilder.CreateVoidAdapter(type);
 		}
 		return type.voidAdapter;
+	}
+
+	internal static void LoadPackedArg(CodeEmitter ilgen, int index, int firstArg, int packedArgPos, Type packedArgType)
+	{
+		index += firstArg;
+		if (index >= packedArgPos)
+		{
+			ilgen.EmitLdarga(packedArgPos);
+			int fieldPos = index - packedArgPos;
+			Type type = packedArgType;
+			while (fieldPos >= MaxArity || (fieldPos == MaxArity - 1 && IsPackedArgsContainer(type.GetField("t8").FieldType)))
+			{
+				FieldInfo field = type.GetField("t8");
+				type = field.FieldType;
+				ilgen.Emit(OpCodes.Ldflda, field);
+				fieldPos -= MaxArity - 1;
+			}
+			ilgen.Emit(OpCodes.Ldfld, type.GetField("t" + (1 + fieldPos)));
+		}
+		else
+		{
+			ilgen.EmitLdarg(index);
+		}
 	}
 #endif
 }

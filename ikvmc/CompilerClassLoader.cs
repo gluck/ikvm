@@ -294,10 +294,6 @@ namespace IKVM.Internal
 						StaticCompiler.IssueMessage(options, Message.WrongClassName, name, f.Name);
 						return null;
 					}
-					if(options.removeUnusedFields)
-					{
-						f.RemoveUnusedFields();
-					}
 					if(f.IsPublic && options.privatePackages != null)
 					{
 						foreach(string p in options.privatePackages)
@@ -987,7 +983,19 @@ namespace IKVM.Internal
 					interfaceWrappers = new TypeWrapper[c.Interfaces.Length];
 					for (int i = 0; i < c.Interfaces.Length; i++)
 					{
-						interfaceWrappers[i] = classLoader.LoadClassByDottedName(c.Interfaces[i].Name);
+						TypeWrapper iface = classLoader.LoadClassByDottedName(c.Interfaces[i].Name);
+						interfaceWrappers[i] = iface;
+						foreach (MethodWrapper mw in iface.GetMethods())
+						{
+							// make sure default interface methods are implemented (they currently have to be explicitly implemented in map.xml)
+							if (mw.IsVirtual && !mw.IsAbstract)
+							{
+								if (GetMethodWrapper(mw.Name, mw.Signature, true) == null)
+								{
+									StaticCompiler.IssueMessage(Message.RemappedTypeMissingDefaultInterfaceMethod, Name, iface.Name + "." + mw.Name + mw.Signature);
+								}
+							}
+						}
 					}
 				}
 				else
@@ -2086,43 +2094,6 @@ namespace IKVM.Internal
 			internal override MethodBase LinkMethod(MethodWrapper mw)
 			{
 				return ((RemappedMethodBaseWrapper)mw).DoLink();
-			}
-
-			internal override TypeWrapper DeclaringTypeWrapper
-			{
-				get
-				{
-					// at the moment we don't support nested remapped types
-					return null;
-				}
-			}
-
-			internal override void Finish()
-			{
-				if(BaseTypeWrapper != null)
-				{
-					BaseTypeWrapper.Finish();
-				}
-				foreach(TypeWrapper iface in Interfaces)
-				{
-					iface.Finish();
-				}
-				foreach(MethodWrapper m in GetMethods())
-				{
-					m.Link();
-				}
-				foreach(FieldWrapper f in GetFields())
-				{
-					f.Link();
-				}
-			}
-
-			internal override TypeWrapper[] InnerClasses
-			{
-				get
-				{
-					return TypeWrapper.EmptyArray;
-				}
 			}
 
 			internal override TypeWrapper[] Interfaces
@@ -3512,7 +3483,6 @@ namespace IKVM.Internal
 		internal Dictionary<string, string> props;
 		internal bool noglobbing;
 		internal CodeGenOptions codegenoptions;
-		internal bool removeUnusedFields;
 		internal bool compressedResources;
 		internal string[] privatePackages;
 		internal string[] publicPackages;
@@ -3702,6 +3672,7 @@ namespace IKVM.Internal
 		MissingType = 4014,
 		MissingReference = 4015,
 		CallerSensitiveOnUnsupportedMethod = 4016,
+		RemappedTypeMissingDefaultInterfaceMethod = 4017,
 		// Fatal errors
 		ResponseFileDepthExceeded = 5000,
 		ErrorReadingFile = 5001,
@@ -3781,10 +3752,10 @@ namespace IKVM.Internal
 			}
 		}
 
-		internal static void Init(bool emitSymbols)
+		internal static void Init(bool nonDeterministicOutput)
 		{
 			UniverseOptions options = UniverseOptions.ResolveMissingMembers | UniverseOptions.EnableFunctionPointers;
-			if (!emitSymbols)
+			if (!nonDeterministicOutput)
 			{
 				options |= UniverseOptions.DeterministicOutput;
 			}
@@ -4098,6 +4069,9 @@ namespace IKVM.Internal
 				case Message.CallerSensitiveOnUnsupportedMethod:
 					msg = "CallerSensitive annotation on unsupported method" + Environment.NewLine +
 						"    (\"{0}.{1}{2}\")";
+					break;
+				case Message.RemappedTypeMissingDefaultInterfaceMethod:
+					msg = "{0} does not implement default interface method {1}";
 					break;
 				default:
 					throw new InvalidProgramException();

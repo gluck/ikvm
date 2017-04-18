@@ -53,6 +53,7 @@ namespace IKVM.Internal
 		NonPublicTypeInSignature = 512,	// this flag is only available after linking and is not set for access stubs
 		DelegateInvokeWithByRefParameter = 1024,
 		Type2FinalField = 2048,
+		NoOp = 4096, // empty static initializer
 	}
 
 	abstract class MemberWrapper
@@ -294,6 +295,11 @@ namespace IKVM.Internal
 		internal bool IsDelegateInvokeWithByRefParameter
 		{
 			get { return (flags & MemberFlags.DelegateInvokeWithByRefParameter) != 0; }
+		}
+
+		internal bool IsNoOp
+		{
+			get { return (flags & MemberFlags.NoOp) != 0; }
 		}
 
 		internal Modifiers Modifiers
@@ -853,6 +859,11 @@ namespace IKVM.Internal
 			get { return (object)Name == (object)StringConstants.INIT; }
 		}
 
+		internal bool IsClassInitializer
+		{
+			get { return (object)Name == (object)StringConstants.CLINIT; }
+		}
+
 		internal bool IsVirtual
 		{
 			get
@@ -870,22 +881,6 @@ namespace IKVM.Internal
 					&& (DeclaringType == CoreClasses.java.lang.Object.Wrapper || DeclaringType == CoreClasses.java.lang.Throwable.Wrapper)
 					&& (Name == StringConstants.CLONE || Name == StringConstants.FINALIZE);
 			}
-		}
-	}
-
-	// placeholder for <clinit> method that exist in ClassFile but not in TypeWrapper
-	// (because it is optimized away)
-	sealed class DummyMethodWrapper : MethodWrapper
-	{
-		internal DummyMethodWrapper(TypeWrapper tw)
-			: base(tw, StringConstants.CLINIT, StringConstants.SIG_VOID, null, PrimitiveTypeWrapper.VOID, TypeWrapper.EmptyArray, Modifiers.Static, MemberFlags.None)
-		{
-		}
-
-		protected override void DoLinkMethod()
-		{
-			// we're pre-linked (because we pass the signature types to the base constructor)
-			throw new InvalidOperationException();
 		}
 	}
 
@@ -1526,6 +1521,21 @@ namespace IKVM.Internal
 			}
 		}
 
+		internal bool IsSerialVersionUID
+		{
+			get
+			{
+				// a serialVersionUID field must be static and final to be recognized (see ObjectStreamClass.getDeclaredSUID())
+				return (Modifiers & (Modifiers.Static | Modifiers.Final)) == (Modifiers.Static | Modifiers.Final)
+					&& Name == "serialVersionUID"
+					&& (FieldTypeWrapper == PrimitiveTypeWrapper.LONG
+						|| FieldTypeWrapper == PrimitiveTypeWrapper.INT
+						|| FieldTypeWrapper == PrimitiveTypeWrapper.CHAR
+						|| FieldTypeWrapper == PrimitiveTypeWrapper.SHORT
+						|| FieldTypeWrapper == PrimitiveTypeWrapper.BYTE);
+			}
+		}
+
 		internal static FieldWrapper Create(TypeWrapper declaringType, TypeWrapper fieldType, FieldInfo fi, string name, string sig, ExModifiers modifiers)
 		{
 			// volatile long & double field accesses must be made atomic
@@ -1799,7 +1809,7 @@ namespace IKVM.Internal
 		{
 			if(getter == null)
 			{
-				EmitThrowNoSuchMethodErrorForGetter(ilgen, this.FieldTypeWrapper, this.IsStatic);
+				EmitThrowNoSuchMethodErrorForGetter(ilgen, this.FieldTypeWrapper, this);
 			}
 			else if(getter.IsStatic)
 			{
@@ -1811,15 +1821,18 @@ namespace IKVM.Internal
 			}
 		}
 
-		internal static void EmitThrowNoSuchMethodErrorForGetter(CodeEmitter ilgen, TypeWrapper type, bool isStatic)
+		internal static void EmitThrowNoSuchMethodErrorForGetter(CodeEmitter ilgen, TypeWrapper type, MemberWrapper member)
 		{
+#if STATIC_COMPILER
+			StaticCompiler.IssueMessage(Message.EmittedNoSuchMethodError, "<unknown>", member.DeclaringType.Name + "." + member.Name + member.Signature);
+#endif
 			// HACK the branch around the throw is to keep the verifier happy
 			CodeEmitterLabel label = ilgen.DefineLabel();
 			ilgen.Emit(OpCodes.Ldc_I4_0);
 			ilgen.EmitBrtrue(label);
 			ilgen.EmitThrow("java.lang.NoSuchMethodError");
 			ilgen.MarkLabel(label);
-			if (!isStatic)
+			if (!member.IsStatic)
 			{
 				ilgen.Emit(OpCodes.Pop);
 			}
@@ -1840,7 +1853,7 @@ namespace IKVM.Internal
 				}
 				else
 				{
-					EmitThrowNoSuchMethodErrorForSetter(ilgen, this.IsStatic);
+					EmitThrowNoSuchMethodErrorForSetter(ilgen, this);
 				}
 			}
 			else if(setter.IsStatic)
@@ -1853,8 +1866,11 @@ namespace IKVM.Internal
 			}
 		}
 
-		internal static void EmitThrowNoSuchMethodErrorForSetter(CodeEmitter ilgen, bool isStatic)
+		internal static void EmitThrowNoSuchMethodErrorForSetter(CodeEmitter ilgen, MemberWrapper member)
 		{
+#if STATIC_COMPILER
+			StaticCompiler.IssueMessage(Message.EmittedNoSuchMethodError, "<unknown>", member.DeclaringType.Name + "." + member.Name + member.Signature);
+#endif
 			// HACK the branch around the throw is to keep the verifier happy
 			CodeEmitterLabel label = ilgen.DefineLabel();
 			ilgen.Emit(OpCodes.Ldc_I4_0);
@@ -1862,7 +1878,7 @@ namespace IKVM.Internal
 			ilgen.EmitThrow("java.lang.NoSuchMethodError");
 			ilgen.MarkLabel(label);
 			ilgen.Emit(OpCodes.Pop);
-			if (!isStatic)
+			if (!member.IsStatic)
 			{
 				ilgen.Emit(OpCodes.Pop);
 			}
@@ -1908,7 +1924,7 @@ namespace IKVM.Internal
 			MethodInfo getter = property.GetGetMethod(true);
 			if(getter == null)
 			{
-				DynamicPropertyFieldWrapper.EmitThrowNoSuchMethodErrorForGetter(ilgen, this.FieldTypeWrapper, this.IsStatic);
+				DynamicPropertyFieldWrapper.EmitThrowNoSuchMethodErrorForGetter(ilgen, this.FieldTypeWrapper, this);
 			}
 			else if(getter.IsStatic)
 			{
@@ -1935,7 +1951,7 @@ namespace IKVM.Internal
 				}
 				else
 				{
-					DynamicPropertyFieldWrapper.EmitThrowNoSuchMethodErrorForSetter(ilgen, this.IsStatic);
+					DynamicPropertyFieldWrapper.EmitThrowNoSuchMethodErrorForSetter(ilgen, this);
 				}
 			}
 			else if(setter.IsStatic)

@@ -151,14 +151,8 @@ class Thread implements Runnable {
         // body replaced in map.xml
     }
     final class Cleanup {
-        private final Thread thread;
-
-        Cleanup(Thread thread) {
-            this.thread = thread;
-        }
-
         protected void finalize() {
-            thread.die();
+            Thread.this.die();
         }
     }
     /* --- start IKVM specific state --- */
@@ -560,7 +554,7 @@ class Thread implements Runnable {
         }
 
         current = this;
-        cleanup = new Cleanup(this);
+        cleanup = new Cleanup();
 
         if (!daemon) {
             cli.System.Threading.Interlocked.Increment(nonDaemonCount);
@@ -1753,10 +1747,11 @@ class Thread implements Runnable {
     // [IKVM] called by sun.misc.Launcher (via map.xml patch) to initialize the context class loader
     final void initContextClassLoader(ClassLoader cl) {
         // we only set contextClassLoader if it hasn't been set (by user code) previously
-        java.util.concurrent.atomic.AtomicReferenceFieldUpdater
-            .newUpdater(Thread.class, ClassLoader.class, "contextClassLoader")
-            .compareAndSet(this, ClassLoader.DUMMY, cl);
+        casContextClassLoader(ClassLoader.DUMMY, cl);
     }
+    
+    @ikvm.internal.InterlockedCompareAndSet("contextClassLoader")
+    private native boolean casContextClassLoader(ClassLoader oldValue, ClassLoader newValue);
 
     /**
      * Returns <tt>true</tt> if and only if the current thread holds the
